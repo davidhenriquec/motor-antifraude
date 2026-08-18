@@ -86,6 +86,19 @@ services:
       timeout: 5s
       retries: 5
 
+  kafka-ui:
+    image: ghcr.io/kafbat/kafka-ui:v1.0.0
+    container_name: antifraude-kafka-ui
+    ports:
+      - "8090:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: motor-antifraude
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:19092
+      DYNAMIC_CONFIG_ENABLED: "true"
+    depends_on:
+      kafka:
+        condition: service_healthy
+
   prometheus:
     image: prom/prometheus:v2.55.1
     container_name: antifraude-prometheus
