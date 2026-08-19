@@ -75,6 +75,22 @@ public class ControladorSimulador {
         return resposta;
     }
 
+    @PostMapping("/transacao")
+    public Map<String, Object> transacao(
+            @RequestParam(required = false) String cliente,
+            @RequestParam double valor) {
+        String alvo = cliente != null ? cliente : gerador.clienteQualquer();
+        long centavos = Math.round(valor * 100);
+        Transacao transacao = gerador.comValor(alvo, centavos);
+        publicador.publicar(transacao);
+
+        Map<String, Object> resposta = new LinkedHashMap<>();
+        resposta.put("cliente", alvo);
+        resposta.put("transacaoId", transacao.transacaoId());
+        resposta.put("valor", valor);
+        return resposta;
+    }
+
     @PostMapping("/verificar-particao")
     public Map<String, Object> verificarParticao(
             @RequestParam(required = false) String cliente,

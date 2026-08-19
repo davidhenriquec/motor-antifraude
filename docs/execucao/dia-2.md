@@ -236,8 +236,8 @@ A segunda organiza por funcionalidade:
 ```
 motor/
 ├── memoria/     MemoriaDoCliente, EventoRecente, JanelasDeTempo, LimitesDaMemoria,
-│                RepositorioDeMemoria, MemoriaNoKafkaStreams
-├── regra/       Regra, RegraVelocidadeAlta, RegraValorAbsoluto, RegrasConfig
+│                ParametrosDoTicketMedio, RepositorioDeMemoria, RepositorioNoKafkaStreams
+├── regra/       Regra, RegraVelocidadeAlta, RegraValorAbsoluto, RegraSomaNaHora, RegrasConfig
 ├── deteccao/    AvaliadorDeTransacao, ResultadoDaAvaliacao
 └── kafka/       TopologiaConfig, ProcessadorDeTransacoes, SerdeJson
 ```
@@ -293,13 +293,14 @@ que não existia mais.
 
 ## Pendências e riscos
 
-**As regras estão fixas em código.** `RegrasConfig` registra as duas como beans, e o Spring injeta a lista **uma vez, na
+**As regras estão fixas em código.** `RegrasConfig` registra as três como beans, e o Spring injeta a lista **uma vez, na
 subida**. Mudar uma regra hoje exige redeploy. É proposital para o dia 2, e o dia 4 resolve — mas exige trocar
 `List<Regra>` por uma fonte consultável.
 
 **A linha de base é média, e a arquitetura decidiu mediana.** A média móvel resolveu o esquecimento, não a resistência a
-envenenamento. Fraude executada devagar ainda desloca o valor. Mediana com memória constante exige um estimador de
-quantil.
+envenenamento. O ataque **agressivo** foi fechado depois, excluindo da base a transação que gerou alerta — antes disso a
+regra emudecia na 12ª transação fraudulenta. Resta o ataque **paciente**, que fica abaixo do limiar de alerta e por isso
+nunca é excluído. Mediana com memória constante exige um estimador de quantil.
 
 **A amplificação de escrita continua**, só está limitada. Com o teto, cada transação de um cliente quente escreve ~52 KB
 no changelog. A solução estrutural seria trocar a lista de eventos por contadores por minuto, ao custo de perder os

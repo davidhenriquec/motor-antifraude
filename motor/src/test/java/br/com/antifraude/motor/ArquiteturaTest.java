@@ -20,7 +20,7 @@ class ArquiteturaTest {
     private static final Set<String> PACOTES_DE_NEGOCIO = Set.of("memoria", "regra", "deteccao");
 
     private static final Set<String> ADAPTADORES = Set.of(
-            "MemoriaNoKafkaStreams.java",
+            "RepositorioNoKafkaStreams.java",
             "RegrasConfig.java");
 
     private static final Set<String> FRAMEWORKS = Set.of(

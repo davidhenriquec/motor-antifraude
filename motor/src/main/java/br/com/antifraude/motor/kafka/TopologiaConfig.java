@@ -33,7 +33,7 @@ public class TopologiaConfig {
 
     public static final String MEMORIA_DO_CLIENTE = "memoria-do-cliente";
 
-    private final ObjectMapper mapper;
+    private final ObjectMapper conversorJson;
     private final MeterRegistry metricas;
     private final List<Regra> regras;
 
@@ -43,53 +43,53 @@ public class TopologiaConfig {
     @Value("${motor.topico-de-saida}")
     private String topicoDeSaida;
 
-    public TopologiaConfig(ObjectMapper mapper, MeterRegistry metricas, List<Regra> regras) {
-        this.mapper = mapper;
+    public TopologiaConfig(ObjectMapper conversorJson, MeterRegistry metricas, List<Regra> regras) {
+        this.conversorJson = conversorJson;
         this.metricas = metricas;
         this.regras = regras;
     }
 
     @Bean
-    public KStream<String, Alerta> fluxoDeDeteccao(StreamsBuilder construtor) {
-        return montar(construtor, mapper, metricas, regras, topicoDeEntrada, topicoDeSaida, true);
+    public KStream<String, Alerta> fluxoDeDeteccao(StreamsBuilder construtorDaTopologia) {
+        return montarTopologia(
+                construtorDaTopologia,
+                conversorJson,
+                metricas,
+                regras,
+                topicoDeEntrada,
+                topicoDeSaida,
+                true);
     }
 
-    public static KStream<String, Alerta> montar(
-            StreamsBuilder construtor,
-            ObjectMapper mapper,
+    public static KStream<String, Alerta> montarTopologia(
+            StreamsBuilder construtorDaTopologia,
+            ObjectMapper conversorJson,
             MeterRegistry metricas,
             List<Regra> regras,
             String topicoDeEntrada,
             String topicoDeSaida,
-            boolean persistente) {
-        log.info("Iniciando consumo do topico: {}", topicoDeEntrada);
+            boolean memoriaEmDisco) {
+        Serde<Transacao> serdeTransacao = SerdeJson.de(Transacao.class, conversorJson);
+        Serde<Alerta> serdeAlerta = SerdeJson.de(Alerta.class, conversorJson);
+        Serde<MemoriaDoCliente> serdeMemoria = SerdeJson.de(MemoriaDoCliente.class, conversorJson);
 
-        Serde<Transacao> serdeTransacao = SerdeJson.de(Transacao.class, mapper);
-        Serde<Alerta> serdeAlerta = SerdeJson.de(Alerta.class, mapper);
-        Serde<MemoriaDoCliente> serdeMemoria = SerdeJson.de(MemoriaDoCliente.class, mapper);
-
-        log.info("serdeTransacao: {}, serdeAlerta: {}, serdeMemoria: {}", serdeTransacao, serdeAlerta, serdeMemoria);
-
-        KeyValueBytesStoreSupplier suporte = persistente
+        KeyValueBytesStoreSupplier armazenamentoFisico = memoriaEmDisco
                 ? Stores.persistentKeyValueStore(MEMORIA_DO_CLIENTE)
                 : Stores.inMemoryKeyValueStore(MEMORIA_DO_CLIENTE);
 
-        log.info("suporte: {}", suporte);
+        StoreBuilder<KeyValueStore<String, MemoriaDoCliente>> construtorDoArmazenamento =
+                Stores.keyValueStoreBuilder(armazenamentoFisico, Serdes.String(), serdeMemoria);
+        construtorDaTopologia.addStateStore(construtorDoArmazenamento);
 
-        StoreBuilder<KeyValueStore<String, MemoriaDoCliente>> memoria = Stores.keyValueStoreBuilder(suporte, Serdes.String(), serdeMemoria);
-        log.info("memoria: {}", memoria);
-
-        construtor.addStateStore(memoria);
-
-        KStream<String, Alerta> alertas = construtor
+        KStream<String, Alerta> alertas = construtorDaTopologia
                 .stream(topicoDeEntrada, Consumed.with(Serdes.String(), serdeTransacao))
                 .process(() -> new ProcessadorDeTransacoes(regras, metricas), MEMORIA_DO_CLIENTE);
 
-        log.info("alertas: {}", alertas);
-
         alertas.to(topicoDeSaida, Produced.with(Serdes.String(), serdeAlerta));
 
-        log.info("Fim do consumo topico de entrada: {}", topicoDeSaida);
+        log.info(
+                "Topologia montada: entrada={} saida={} memoria={} regras={} memoriaEmDisco={}",
+                topicoDeEntrada, topicoDeSaida, MEMORIA_DO_CLIENTE, regras.size(), memoriaEmDisco);
 
         return alertas;
     }

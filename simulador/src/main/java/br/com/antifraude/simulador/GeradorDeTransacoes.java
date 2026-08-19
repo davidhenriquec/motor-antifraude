@@ -72,6 +72,11 @@ public class GeradorDeTransacoes {
         return sequencia;
     }
 
+    public Transacao comValor(String clienteId, long valorCentavos) {
+        PerfilSimulado cliente = buscar(clienteId);
+        return construir(cliente, valorCentavos, cliente.cidadeHabitual(), Canal.ECOMMERCE);
+    }
+
     private PerfilSimulado buscar(String clienteId) {
         return clientes.stream()
                 .filter(c -> c.clienteId().equals(clienteId))

@@ -14,7 +14,13 @@ public class RegrasConfig {
 
     @Bean
     public Regra regraValorAbsoluto(
-            @Value("${motor.regras.valor-absoluto.limiar-centavos}") long limiarCentavos) {
-        return new RegraValorAbsoluto(limiarCentavos);
+            @Value("${motor.regras.valor-absoluto.limiar-centavos}") long limiarDeValorCentavos) {
+        return new RegraValorAbsoluto(limiarDeValorCentavos);
+    }
+
+    @Bean
+    public Regra regraSomaNaHora(
+            @Value("${motor.regras.soma-na-hora.limite-centavos}") long limiteDaSomaCentavos) {
+        return new RegraSomaNaHora(limiteDaSomaCentavos);
     }
 }

@@ -5,7 +5,7 @@ import br.com.antifraude.contrato.Transacao;
 import br.com.antifraude.motor.deteccao.AvaliadorDeTransacao;
 import br.com.antifraude.motor.deteccao.ResultadoDaAvaliacao;
 import br.com.antifraude.motor.memoria.MemoriaDoCliente;
-import br.com.antifraude.motor.memoria.MemoriaNoKafkaStreams;
+import br.com.antifraude.motor.memoria.RepositorioNoKafkaStreams;
 import br.com.antifraude.motor.regra.Regra;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -27,10 +27,10 @@ public class ProcessadorDeTransacoes implements Processor<String, Transacao, Str
 
     private ProcessorContext<String, Alerta> contexto;
     private AvaliadorDeTransacao avaliador;
-    private Counter avaliadas;
-    private Counter duplicadasDescartadas;
+    private Counter transacoesAvaliadas;
+    private Counter transacoesDuplicadas;
     private Counter alertasGerados;
-    private Counter memoriaNoLimite;
+    private Counter memoriasNoTeto;
 
     public ProcessadorDeTransacoes(List<Regra> regras, MeterRegistry metricas) {
         this.regras = regras;
@@ -39,34 +39,30 @@ public class ProcessadorDeTransacoes implements Processor<String, Transacao, Str
 
     @Override
     public void init(ProcessorContext<String, Alerta> contexto) {
-        log.info("Iniciando init do processador de transacoes");
         this.contexto = contexto;
 
-        KeyValueStore<String, MemoriaDoCliente> armazenamento = contexto.getStateStore(TopologiaConfig.MEMORIA_DO_CLIENTE);
+        KeyValueStore<String, MemoriaDoCliente> memoriasPorCliente = contexto.getStateStore(TopologiaConfig.MEMORIA_DO_CLIENTE);
 
-        this.avaliador = new AvaliadorDeTransacao(new MemoriaNoKafkaStreams(armazenamento), regras);
+        this.avaliador = new AvaliadorDeTransacao(new RepositorioNoKafkaStreams(memoriasPorCliente), regras);
 
-        this.avaliadas = Counter.builder("antifraude.transacoes.avaliadas")
+        this.transacoesAvaliadas = Counter.builder("antifraude.transacoes.avaliadas")
                 .description("Transacoes que passaram pela avaliacao de regras")
                 .register(metricas);
-
-        this.duplicadasDescartadas = Counter.builder("antifraude.transacoes.duplicadas")
+        this.transacoesDuplicadas = Counter.builder("antifraude.transacoes.duplicadas")
                 .description("Transacoes descartadas por ja terem sido processadas")
                 .register(metricas);
-
         this.alertasGerados = Counter.builder("antifraude.alertas.gerados")
                 .description("Alertas publicados")
                 .register(metricas);
-        this.memoriaNoLimite = Counter.builder("antifraude.memoria.no.limite")
+        this.memoriasNoTeto = Counter.builder("antifraude.memoria.no.limite")
                 .description("Transacoes de clientes cuja memoria atingiu o teto de eventos")
                 .register(metricas);
 
-        log.info("Fim do init do processador de transacoes");
+        log.info("Tarefa {} assumida com {} regra(s) ativa(s)", contexto.taskId(), regras.size());
     }
 
     @Override
     public void process(Record<String, Transacao> registro) {
-        log.info("Iniciando process do processador de transacoes");
         Transacao transacao = registro.value();
         if (transacao == null) {
             return;
@@ -75,27 +71,27 @@ public class ProcessadorDeTransacoes implements Processor<String, Transacao, Str
         ResultadoDaAvaliacao resultado = avaliador.avaliar(transacao);
 
         if (resultado.ehDuplicada()) {
-            duplicadasDescartadas.increment();
+            transacoesDuplicadas.increment();
             return;
         }
 
-        avaliadas.increment();
+        transacoesAvaliadas.increment();
 
-        if (resultado.memoriaNoLimite()) {
-            memoriaNoLimite.increment();
+        if (resultado.memoriaAtingiuOTeto()) {
+            memoriasNoTeto.increment();
         }
 
         for (Alerta alerta : resultado.alertas()) {
             alertasGerados.increment();
             log.info(
-                    "ALERTA regra={} cliente={} valor={} contagem5m={} ticketMedio={}",
+                    "ALERTA regra={} v{} severidade={} cliente={} valor={} entradas={}",
                     alerta.regraId(),
+                    alerta.regraVersao(),
+                    alerta.severidade(),
                     alerta.clienteId(),
                     alerta.valorCentavos() / 100.0,
-                    alerta.valoresEntrada().get("contagemJanela5m"),
-                    ((Number) alerta.valoresEntrada().get("ticketMedioCentavos")).longValue() / 100.0);
+                    alerta.valoresEntrada());
             contexto.forward(registro.withValue(alerta));
         }
-        log.info("Fim do process do processador de transacoes");
     }
 }

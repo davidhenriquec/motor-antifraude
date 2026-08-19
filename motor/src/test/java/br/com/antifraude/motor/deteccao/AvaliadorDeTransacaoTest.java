@@ -99,6 +99,56 @@ class AvaliadorDeTransacaoTest {
                 .isEqualTo(4);
     }
 
+    @Test
+    @DisplayName("transacao sem alerta continua alimentando o ticket medio")
+    void transacaoSemAlertaAlimentaOTicketMedio() {
+        avaliador.avaliar(transacao(CLIENTE, 10_000, Instant.now()));
+
+        assertThat(repositorio.buscar(CLIENTE).ticketMedioCentavos()).isEqualTo(10_000);
+    }
+
+    @Test
+    @DisplayName("durante a formacao do ticket medio o alerta nao impede a atualizacao")
+    void naFormacaoDoTicketMedioTudoEhAbsorvido() {
+        AvaliadorDeTransacao sempreAlerta = new AvaliadorDeTransacao(
+                repositorio, List.of(new RegraQueSempreDispara("a")));
+        Instant base = Instant.now();
+
+        for (int i = 0; i < 4; i++) {
+            sempreAlerta.avaliar(transacao(CLIENTE, 10_000, base.plusSeconds(i)));
+        }
+
+        assertThat(repositorio.buscar(CLIENTE).ticketMedioCentavos())
+                .as("senao a base trava no valor da primeira transacao e o cliente alerta para sempre")
+                .isEqualTo(10_000);
+    }
+
+    @Test
+    @DisplayName("ataque sustentado nao emudece a regra: quem gerou alerta nao vira o novo normal")
+    void ataqueSustentadoNaoEnvenenaOTicketMedio() {
+        Instant base = Instant.now().minus(10, ChronoUnit.MINUTES);
+        for (int i = 0; i < 10; i++) {
+            avaliador.avaliar(transacao(CLIENTE, 6_800, base.plusSeconds(i)));
+        }
+        long ticketMedioLegitimo = repositorio.buscar(CLIENTE).ticketMedioCentavos();
+
+        int disparos = 0;
+        for (int i = 0; i < 30; i++) {
+            ResultadoDaAvaliacao resultado =
+                    avaliador.avaliar(transacao(CLIENTE, 80_000, base.plusSeconds(60 + i)));
+            if (resultado.temAlertas()) {
+                disparos++;
+            }
+        }
+
+        assertThat(disparos)
+                .as("antes da correcao a regra emudecia por volta da 12a transacao fraudulenta")
+                .isEqualTo(30);
+        assertThat(repositorio.buscar(CLIENTE).ticketMedioCentavos())
+                .as("nenhuma transacao alertada pode mover a linha de base")
+                .isEqualTo(ticketMedioLegitimo);
+    }
+
     private Transacao transacao(String cliente, long valorCentavos, Instant horario) {
         return new Transacao(
                 UUID.randomUUID().toString(),

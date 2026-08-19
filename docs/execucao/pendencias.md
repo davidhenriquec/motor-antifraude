@@ -48,12 +48,16 @@ Remover deixa a justificativa só no documento.
 
 Itens que estavam nesta lista e saíram.
 
-| Item                         | Como ficou                                                                             |
-|------------------------------|----------------------------------------------------------------------------------------|
-| Testes de `MemoriaDoCliente` | 9 testes cobrindo poda, janelas, deduplicação, última cidade e linha de base           |
-| Linha de base que esquece    | Média móvel exponencial com meia-vida de 30 dias, mais peso mínimo de 5% por transação |
-| Teto de memória por cliente  | 200 eventos e 500 identificadores, com métrica sinalizando cliente quente              |
-| Segunda regra                | `RegraValorAbsoluto`, que provou a abstração ao entrar sem tocar no motor              |
+| Item                                | Como ficou                                                                                                                                                |
+|-------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Testes de `MemoriaDoCliente`        | 11 testes cobrindo descarte, janelas, deduplicação, última cidade e ticket médio                                                                          |
+| Linha de base que esquece           | Média móvel exponencial com meia-vida de 30 dias, mais peso mínimo de 5% por transação                                                                    |
+| Teto de memória por cliente         | 200 eventos e 500 identificadores, com métrica sinalizando cliente quente                                                                                 |
+| Segunda regra                       | `RegraValorAbsoluto`, que provou a abstração ao entrar sem tocar no motor                                                                                 |
+| Envenenamento pelo ataque agressivo | Transação que gerou alerta não atualiza mais o ticket médio. A regra emudecia na 12ª transação; agora não emudece                                         |
+| Guarda de partida a frio            | Nas 5 primeiras transações tudo é absorvido, senão a base trava no valor da primeira                                                                      |
+| Janela de 60 minutos sem uso        | `RegraSomaNaHora`, limite absoluto de R$ 10.000, pega o fraudador de ritmo controlado                                                                     |
+| Nomes vagos no motor                | Auditoria completa de nomes: `anterior` → `memoriaAntesDaTransacao`, `CURTA`/`MEDIA` → `CINCO_MINUTOS`/`UMA_HORA`, vocabulário unificado em `ticketMedio` |
 
 ---
 
@@ -65,6 +69,12 @@ Itens que estavam nesta lista e saíram.
 
 **O que ela não resolveu:** resistência a envenenamento. Fraude executada devagar, com muitas transações pequenas, ainda
 desloca o valor e treina o sistema a aceitar valores cada vez maiores.
+
+**O que foi resolvido depois:** o ataque **agressivo** — aquele em que a fraude dispara alerta e mesmo assim alimentava
+a base. Excluir da base a transação alertada eliminou esse caso (medido: a regra emudecia na 12ª transação fraudulenta).
+Restam o ataque **paciente**, que se mantém abaixo do limiar de alerta e por isso nunca é excluído, e é contra ele que a
+mediana continua sendo necessária. A `RegraSomaNaHora` cobre boa parte dele por acumulação, mas não o caso de rampa
+lenta ao longo de dias.
 
 **Por que não é só trocar a fórmula:** mediana exata exige guardar a distribuição de cada cliente. Com milhões de
 clientes ativos, guardar uma amostra de 200 valores por pessoa daria dezenas de gigabytes.
@@ -90,6 +100,33 @@ tamanho fixo independente da taxa, algo em torno de 1,5 KB.
 e limitada (últimos 10) ao lado dos baldes.
 
 **Esforço:** ~4 h. Só vale se o teste de carga do dia 6 mostrar que a escrita é gargalo.
+
+### Deduplicação do alerta dentro do motor
+
+**O sintoma medido:** a `RegraSomaNaHora` produziu **29 alertas** num ataque que deveria render 1. Passado o limite da
+hora, ela dispara em toda transação seguinte enquanto a janela não esvazia.
+
+**Por que não é só dessa regra:** qualquer regra baseada em janela acumulada tem o mesmo comportamento. É estrutural,
+não um defeito da regra nova.
+
+**A solução já está desenhada no tópico 3:** chave `cliente + regra + janela + severidade` para decidir se publica, e
+`cliente + regra + janela` para decidir o campo `notificarCliente`. Cabe na memória local, porque a chave inteira vive
+dentro de uma partição.
+
+**Consequência de não fazer:** o cliente recebe dezenas de avisos do mesmo evento — exatamente a fadiga de alerta que o
+tópico 6 mede e que queima o canal de notificação.
+
+**Esforço:** ~3 h. Deve entrar antes do dia 5, porque o `notificacao` herda o problema se a duplicata sair do motor.
+
+### Exceção em regra derruba a thread
+
+Uma regra que lance exceção dentro de `process()` mata a `StreamThread` e para a partição inteira. Hoje não há proteção.
+Com regras vindas do Mongo no dia 4, o risco deixa de ser teórico.
+
+**Solução:** envolver a avaliação de cada regra em `try/catch`, contar a falha numa métrica por regra e seguir com as
+demais. Uma regra quebrada deve desativar a si mesma, não derrubar o motor.
+
+**Esforço:** ~1 h. É a proteção mais barata da lista.
 
 ---
 

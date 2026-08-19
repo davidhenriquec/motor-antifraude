@@ -20,20 +20,28 @@ public class AvaliadorDeTransacao {
     }
 
     public ResultadoDaAvaliacao avaliar(Transacao transacao) {
-        MemoriaDoCliente anterior = repositorio.buscar(transacao.clienteId());
+        MemoriaDoCliente memoriaAntesDaTransacao = repositorio.buscar(transacao.clienteId());
 
-        if (anterior.jaViu(transacao.transacaoId())) {
+        if (memoriaAntesDaTransacao.jaViu(transacao.transacaoId())) {
             return ResultadoDaAvaliacao.duplicada();
         }
 
-        MemoriaDoCliente atualizada = anterior.registrar(transacao);
-        repositorio.salvar(transacao.clienteId(), atualizada);
+        MemoriaDoCliente memoriaComATransacao = memoriaAntesDaTransacao.registrarEvento(transacao);
 
         List<Alerta> alertas = regras.stream()
-                .map(regra -> regra.avaliar(transacao, atualizada))
+                .map(regra -> regra.avaliar(transacao, memoriaComATransacao))
                 .flatMap(Optional::stream)
                 .toList();
 
-        return ResultadoDaAvaliacao.avaliada(alertas, atualizada.atingiuLimiteDeEventos());
+        boolean deveAtualizarOTicketMedio =
+                alertas.isEmpty() || memoriaAntesDaTransacao.aindaFormandoOTicketMedio();
+
+        MemoriaDoCliente memoriaParaSalvar = deveAtualizarOTicketMedio
+                ? memoriaComATransacao.comTicketMedio(memoriaAntesDaTransacao.ticketMedioApos(transacao))
+                : memoriaComATransacao;
+
+        repositorio.salvar(transacao.clienteId(), memoriaParaSalvar);
+
+        return ResultadoDaAvaliacao.avaliada(alertas, memoriaParaSalvar.atingiuLimiteDeEventos());
     }
 }

@@ -38,7 +38,7 @@ class TopologiaConfigTest {
         mapper = new ObjectMapper().registerModule(new JavaTimeModule());
 
         StreamsBuilder construtor = new StreamsBuilder();
-        TopologiaConfig.montar(
+        TopologiaConfig.montarTopologia(
                 construtor,
                 mapper,
                 new SimpleMeterRegistry(),

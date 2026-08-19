@@ -11,7 +11,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-class LimiteDaMemoriaTest {
+class LimitesDaMemoriaTest {
 
     private static final Instant AGORA = Instant.parse("2026-08-19T12:00:00Z");
 
@@ -72,7 +72,9 @@ class LimiteDaMemoriaTest {
     private MemoriaDoCliente clienteQuente(int quantidade) {
         MemoriaDoCliente memoria = MemoriaDoCliente.vazia();
         for (int i = 0; i < quantidade; i++) {
-            memoria = memoria.registrar(transacao(AGORA.plus(i, ChronoUnit.SECONDS)));
+            Transacao transacao = transacao(AGORA.plus(i, ChronoUnit.SECONDS));
+            memoria = memoria.registrarEvento(transacao)
+                    .comTicketMedio(memoria.ticketMedioApos(transacao));
         }
         return memoria;
     }

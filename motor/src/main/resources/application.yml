@@ -43,6 +43,8 @@ motor:
   regras:
     valor-absoluto:
       limiar-centavos: 3000000
+    soma-na-hora:
+      limite-centavos: 1000000
 
 logging:
   level:

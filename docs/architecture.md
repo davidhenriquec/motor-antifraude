@@ -1009,6 +1009,69 @@ mais** — o cliente de alto valor é o que mais recebe alerta indevido.
 
 **Mediana em vez de média**, porque a mediana resiste a valores extremos e a manipulação gradual.
 
+### O ataque que o limiar dinâmico sozinho não resiste
+
+O limiar relativo tem um ponto cego que só aparece quando se olha o ciclo completo: **a transação fraudulenta alimenta a
+linha de base contra a qual ela própria é julgada.**
+
+Cada transação desloca o ticket médio em pelo menos 5% (o peso mínimo). Como o limiar é o dobro do ticket médio, cada
+fraude eleva o próprio limiar. O ataque **treina o detector a aceitá-lo**.
+
+Simulação com cliente de ticket R$ 68 e fraudador repetindo R$ 800:
+
+| Transação fraudulenta | Ticket médio | Limiar (2×) | Dispara? |
+|-----------------------|--------------|-------------|----------|
+| 1                     | R$ 104,60    | R$ 209,20   | sim      |
+| 5                     | R$ 233,59    | R$ 467,18   | sim      |
+| 11                    | R$ 383,64    | R$ 767,28   | sim      |
+| **12**                | R$ 404,46    | R$ 808,91   | **não**  |
+
+**A regra emudece na décima segunda transação** e o fraudador opera invisível a partir daí.
+
+E há a variante paciente, que nem chega a disparar: transações sempre logo abaixo do dobro, subindo a base devagar. É o
+envenenamento descrito na seção 5, agora com número medido.
+
+**Duas defesas, porque são dois atacantes diferentes.**
+
+**Primeira — quem gerou alerta não define o normal.** A transação continua contando nas janelas (sem isso a regra de
+velocidade cegaria), mas não atualiza o ticket médio. Uma transação sob suspeita não pode ser usada para definir o que é
+não-suspeito.
+
+Isso exigiu inverter a ordem de processamento: antes o motor atualizava a memória inteira e depois avaliava; agora
+registra o evento, avalia, e só então decide se absorve o valor na linha de base.
+
+**Segunda — soma acumulada em 60 minutos, com limite absoluto.** O fraudador paciente escapa da regra de velocidade se
+ficar em 3 transações por janela de 5 minutos — mas em uma hora acumula 36 transações. Como o limite é fixo (R$ 10.000)
+e não referencia a linha de base, **envenenar a base não ajuda em nada**. É a primeira regra a usar a janela de 60
+minutos, que até então existia como infraestrutura sem consumidor.
+
+|                                  | Fraudador **agressivo**     | Fraudador **paciente** |
+|----------------------------------|-----------------------------|------------------------|
+| Velocidade em 5 min              | pegava, e emudecia na 12ª   | nunca pega             |
+| **Exclusão do alertado da base** | **pega sempre**             | não ajuda              |
+| Valor absoluto R$ 30.000         | só transação isolada enorme | não pega               |
+| **Soma em 60 min**               | pega                        | **pega**               |
+
+**A guarda de partida a frio.** A primeira versão da defesa introduziu um problema pior que o original. Na primeira
+transação a linha de base nasce igual a ela mesma; se vier um valor baixo, o limiar fica **abaixo do gasto normal do
+cliente**, transações legítimas passam a alertar — e, com a exclusão ativa, elas nunca mais corrigem a base. Ela trava
+permanentemente no valor errado.
+
+Medido em cliente real do simulador: base congelada em **R$ 496** para quem gastava **R$ 1.076**.
+
+A correção é não aplicar a exclusão enquanto a base está se formando: **nas 5 primeiras transações tudo é absorvido, com
+alerta ou sem**. Depois disso a exclusão vale. Após a guarda, o mesmo teste produziu base de
+R$ 476 para um cliente que gasta entre R$ 275 e R$ 833 — limiar de R$ 952, acima de todo o gasto legítimo, e **nenhum
+alerta espúrio**.
+
+**Resultado medido em 30 transações fraudulentas contra cliente novo:**
+
+|                                        | Antes                | Depois                     |
+|----------------------------------------|----------------------|----------------------------|
+| Alertas de velocidade                  | ~11, depois silêncio | **30**                     |
+| Ticket médio durante o ataque          | subia a cada fraude  | **congelado em R$ 476,01** |
+| Alertas espúrios no histórico legítimo | 5                    | **0**                      |
+
 ### 2.5 A única integração síncrona
 
 O disjuntor: depois de N falhas seguidas, **para de chamar** por um período. Passado o tempo, deixa
@@ -1107,12 +1170,19 @@ trataria se houvesse — não como componente.
 
 ## 5. Limitações conhecidas
 
-- **Cliente novo não tem linha de base.** Precisa de resposta explícita: média do segmento como
-  partida, postura mais conservadora, ou alerta marcado como "base insuficiente".
-- **A linha de base pode ser envenenada.** Fraude executada devagar desloca o baseline. A mediana
-  mitiga, e excluir da base as transações já sinalizadas ajuda — mas não elimina.
-- **Comportamento legítimo muda.** Promoção, mudança de cidade, viagens a trabalho: a base fica
-  defasada por até 30 dias.
+- **Cliente novo não tem linha de base.** A guarda de partida a frio resolve o caso patológico — a base travar no valor
+  da primeira transação —, mas as 5 primeiras transações continuam sendo avaliadas contra uma base formada por elas
+  mesmas. Média do segmento como partida seria melhor.
+- **A linha de base pode ser envenenada — mitigado, não eliminado.** Excluir da base as transações já sinalizadas está
+  implementado, e fecha o ataque agressivo (medido: a regra emudecia na 12ª transação, agora não emudece). A soma
+  horária fecha o paciente. **Falta a mediana**, que é a defesa contra o deslocamento gradual abaixo do limiar de
+  alerta.
+- **A soma horária inunda.** Passado o limite, ela alerta em *toda* transação seguinte dentro da hora — 29 alertas
+  medidos onde deveria haver 1. A correção é a deduplicação por
+  `cliente + regra + janela` descrita no tópico 3, ainda não implementada.
+- **Comportamento legítimo muda, e agora a base pode travar.** Cliente que mudou de padrão depois de formada a base
+  passa a alertar, e como alerta não alimenta a base, ela não acompanha — o alerta se perpetua. O destravamento correto
+  é a resposta *"fui eu"* do cliente, documentada no tópico 6 e não implementada.
 - **Adicionar janela ao cardápio exige aquecimento** — **não é operação de minutos, é planejamento
   de mês**.
 - **As três regras que dependem de dado cadastral não serão implementadas**, apenas descritas.
@@ -1124,6 +1194,9 @@ trataria se houvesse — não como componente.
 - [ ] Calibrar os limiares do disjuntor para não abrir em oscilação normal do provedor
 - [ ] Medir o tempo de reconstrução da janela de 30 dias
 - [ ] Validar que a mediana é calculável com memória aceitável no volume esperado
+- [ ] Calibrar o limite da soma horária (R$ 10.000 é chute) contra volume real por segmento
+- [ ] Deduplicar o alerta da soma horária por `cliente + regra + janela`
+- [ ] Medir quantos clientes legítimos ficam com a base travada por alertarem cedo demais
 
 ---
 ---

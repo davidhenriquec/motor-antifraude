@@ -22,75 +22,104 @@ public record MemoriaDoCliente(
         return transacoesVistas.containsKey(transacaoId);
     }
 
-    public MemoriaDoCliente registrar(Transacao transacao) {
-        Instant agora = transacao.horarioEvento();
+    public MemoriaDoCliente registrarEvento(Transacao transacao) {
+        Instant horarioDaTransacao = transacao.horarioEvento();
 
-        List<EventoRecente> eventos = new ArrayList<>(eventosRecentes);
-        eventos.add(new EventoRecente(agora, transacao.valorCentavos(), transacao.cidade()));
+        List<EventoRecente> eventosAtualizados = new ArrayList<>(eventosRecentes);
+        eventosAtualizados.add(new EventoRecente(horarioDaTransacao, transacao.valorCentavos(), transacao.cidade()));
 
-        Map<String, Instant> vistas = new LinkedHashMap<>(transacoesVistas);
-        vistas.put(transacao.transacaoId(), agora);
+        Map<String, Instant> identificadoresVistos = new LinkedHashMap<>(transacoesVistas);
+        identificadoresVistos.put(transacao.transacaoId(), horarioDaTransacao);
 
-        Instant ultimo = ultimoHorario == null || agora.isAfter(ultimoHorario) ? agora : ultimoHorario;
-        String cidade = ultimo.equals(agora) ? transacao.cidade() : ultimaCidade;
+        boolean transacaoEhAMaisRecente =
+                ultimoHorario == null || horarioDaTransacao.isAfter(ultimoHorario);
+        Instant horarioMaisRecente = transacaoEhAMaisRecente ? horarioDaTransacao : ultimoHorario;
+        String cidadeMaisRecente = transacaoEhAMaisRecente ? transacao.cidade() : ultimaCidade;
 
         return new MemoriaDoCliente(
-                eventos,
+                eventosAtualizados,
                 contagemHistorica + 1,
-                proximoTicketMedio(agora, transacao.valorCentavos()),
-                cidade,
-                ultimo,
-                vistas)
-                .podar(agora);
+                ticketMedioCentavos,
+                cidadeMaisRecente,
+                horarioMaisRecente,
+                identificadoresVistos)
+                .descartarOQueExpirou(horarioDaTransacao);
     }
 
-    private long proximoTicketMedio(Instant agora, long valorCentavos) {
-        if (contagemHistorica == 0 || ultimoHorario == null) {
+    public long ticketMedioApos(Transacao transacao) {
+        return calcularTicketMedio(transacao.horarioEvento(), transacao.valorCentavos());
+    }
+
+    public MemoriaDoCliente comTicketMedio(long novoTicketMedioCentavos) {
+        return new MemoriaDoCliente(
+                eventosRecentes,
+                contagemHistorica,
+                novoTicketMedioCentavos,
+                ultimaCidade,
+                ultimoHorario,
+                transacoesVistas);
+    }
+
+    private long calcularTicketMedio(Instant horarioDaTransacao, long valorCentavos) {
+        if (ticketMedioCentavos == 0 || ultimoHorario == null) {
             return valorCentavos;
         }
 
-        long segundosDecorridos = Math.max(0, Duration.between(ultimoHorario, agora).toSeconds());
-        double pesoPorTempo =
-                1 - Math.exp(-(double) segundosDecorridos / JanelasDeTempo.CONSTANTE_DE_TEMPO_EM_SEGUNDOS);
-        double peso = Math.max(pesoPorTempo, JanelasDeTempo.PESO_MINIMO_POR_TRANSACAO);
+        long segundosDesdeAUltimaTransacao =
+                Math.max(0, Duration.between(ultimoHorario, horarioDaTransacao).toSeconds());
+        double pesoPeloTempoDecorrido = 1 - Math.exp(-(double) segundosDesdeAUltimaTransacao
+                / ParametrosDoTicketMedio.CONSTANTE_DE_DECAIMENTO_EM_SEGUNDOS);
+        double peso = Math.max(
+                pesoPeloTempoDecorrido, ParametrosDoTicketMedio.PESO_MINIMO_POR_TRANSACAO);
 
         return Math.round(ticketMedioCentavos * (1 - peso) + valorCentavos * peso);
     }
 
-    public MemoriaDoCliente podar(Instant referencia) {
-        Instant corteEventos = referencia.minus(JanelasDeTempo.RETENCAO_DE_EVENTOS);
-        Instant corteDeduplicacao = referencia.minus(JanelasDeTempo.MEMORIA_DE_DEDUPLICACAO);
+    public MemoriaDoCliente descartarOQueExpirou(Instant horarioDeReferencia) {
+        Instant eventoMaisAntigoQueVale =
+                horarioDeReferencia.minus(JanelasDeTempo.RETENCAO_DE_EVENTOS);
+        Instant identificadorMaisAntigoQueVale =
+                horarioDeReferencia.minus(JanelasDeTempo.LEMBRANCA_DE_IDENTIFICADORES);
 
-        List<EventoRecente> porIdade = eventosRecentes.stream()
-                .filter(e -> e.horario().isAfter(corteEventos))
+        List<EventoRecente> eventosDentroDaRetencao = eventosRecentes.stream()
+                .filter(evento -> evento.horario().isAfter(eventoMaisAntigoQueVale))
                 .toList();
-        List<EventoRecente> eventos = maisRecentes(porIdade, LimitesDaMemoria.MAXIMO_DE_EVENTOS);
+        List<EventoRecente> eventosDentroDoTeto =
+                manterOsMaisRecentes(eventosDentroDaRetencao, LimitesDaMemoria.MAXIMO_DE_EVENTOS);
 
-        Map<String, Instant> vistas = new LinkedHashMap<>();
-        transacoesVistas.forEach((id, quando) -> {
-            if (quando.isAfter(corteDeduplicacao)) {
-                vistas.put(id, quando);
+        Map<String, Instant> identificadoresDentroDaRetencao = new LinkedHashMap<>();
+        transacoesVistas.forEach((transacaoId, quandoFoiVista) -> {
+            if (quandoFoiVista.isAfter(identificadorMaisAntigoQueVale)) {
+                identificadoresDentroDaRetencao.put(transacaoId, quandoFoiVista);
             }
         });
-        descartarMaisAntigos(vistas, LimitesDaMemoria.MAXIMO_DE_IDENTIFICADORES);
+        removerOsMaisAntigos(
+                identificadoresDentroDaRetencao, LimitesDaMemoria.MAXIMO_DE_IDENTIFICADORES);
 
         return new MemoriaDoCliente(
-                eventos, contagemHistorica, ticketMedioCentavos, ultimaCidade, ultimoHorario, vistas);
+                eventosDentroDoTeto,
+                contagemHistorica,
+                ticketMedioCentavos,
+                ultimaCidade,
+                ultimoHorario,
+                identificadoresDentroDaRetencao);
     }
 
-    private static List<EventoRecente> maisRecentes(List<EventoRecente> eventos, int maximo) {
-        if (eventos.size() <= maximo) {
+    private static List<EventoRecente> manterOsMaisRecentes(
+            List<EventoRecente> eventos, int quantidadeMaxima) {
+        if (eventos.size() <= quantidadeMaxima) {
             return eventos;
         }
-        return List.copyOf(eventos.subList(eventos.size() - maximo, eventos.size()));
+        return List.copyOf(eventos.subList(eventos.size() - quantidadeMaxima, eventos.size()));
     }
 
-    private static void descartarMaisAntigos(Map<String, Instant> vistas, int maximo) {
-        Iterator<String> antigos = vistas.keySet().iterator();
-        int excedente = vistas.size() - maximo;
-        while (excedente > 0 && antigos.hasNext()) {
-            antigos.next();
-            antigos.remove();
+    private static void removerOsMaisAntigos(
+            Map<String, Instant> identificadores, int quantidadeMaxima) {
+        Iterator<String> doMaisAntigoParaOMaisNovo = identificadores.keySet().iterator();
+        int excedente = identificadores.size() - quantidadeMaxima;
+        while (excedente > 0 && doMaisAntigoParaOMaisNovo.hasNext()) {
+            doMaisAntigoParaOMaisNovo.next();
+            doMaisAntigoParaOMaisNovo.remove();
             excedente--;
         }
     }
@@ -99,20 +128,26 @@ public record MemoriaDoCliente(
         return eventosRecentes.size() >= LimitesDaMemoria.MAXIMO_DE_EVENTOS;
     }
 
-    public long contagemNaJanela(Duration janela, Instant referencia) {
-        Instant corte = referencia.minus(janela);
-        return eventosRecentes.stream().filter(e -> e.horario().isAfter(corte)).count();
+    public long contagemNaJanela(Duration janela, Instant horarioDeReferencia) {
+        Instant inicioDaJanela = horarioDeReferencia.minus(janela);
+        return eventosRecentes.stream()
+                .filter(evento -> evento.horario().isAfter(inicioDaJanela))
+                .count();
     }
 
-    public long somaNaJanelaCentavos(Duration janela, Instant referencia) {
-        Instant corte = referencia.minus(janela);
+    public long somaNaJanelaCentavos(Duration janela, Instant horarioDeReferencia) {
+        Instant inicioDaJanela = horarioDeReferencia.minus(janela);
         return eventosRecentes.stream()
-                .filter(e -> e.horario().isAfter(corte))
+                .filter(evento -> evento.horario().isAfter(inicioDaJanela))
                 .mapToLong(EventoRecente::valorCentavos)
                 .sum();
     }
 
-    public boolean temLinhaDeBase(int minimoDeTransacoes) {
+    public boolean temHistoricoSuficiente(int minimoDeTransacoes) {
         return contagemHistorica >= minimoDeTransacoes;
+    }
+
+    public boolean aindaFormandoOTicketMedio() {
+        return contagemHistorica < ParametrosDoTicketMedio.TRANSACOES_PARA_FORMAR_O_TICKET_MEDIO;
     }
 }

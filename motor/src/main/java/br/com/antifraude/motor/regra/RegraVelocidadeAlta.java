@@ -17,9 +17,9 @@ public class RegraVelocidadeAlta implements Regra {
     public static final String ID = "velocidade-alta";
     public static final int VERSAO = 1;
 
-    private static final long TRANSACOES_NA_JANELA = 3;
-    private static final double FATOR_SOBRE_O_TICKET = 2.0;
-    private static final int MINIMO_DE_HISTORICO = 5;
+    private static final long LIMITE_DE_TRANSACOES_NA_JANELA = 3;
+    private static final double FATOR_SOBRE_O_TICKET_MEDIO = 2.0;
+    private static final int MINIMO_DE_TRANSACOES_NO_HISTORICO = 5;
 
     @Override
     public String id() {
@@ -33,28 +33,30 @@ public class RegraVelocidadeAlta implements Regra {
 
     @Override
     public Optional<Alerta> avaliar(Transacao transacao, MemoriaDoCliente memoria) {
-        if (!memoria.temLinhaDeBase(MINIMO_DE_HISTORICO)) {
+        if (!memoria.temHistoricoSuficiente(MINIMO_DE_TRANSACOES_NO_HISTORICO)) {
             return Optional.empty();
         }
 
-        Instant referencia = transacao.horarioEvento();
-        long contagem = memoria.contagemNaJanela(JanelasDeTempo.CURTA, referencia);
-        long ticketMedio = memoria.ticketMedioCentavos();
-        long limiar = Math.round(ticketMedio * FATOR_SOBRE_O_TICKET);
+        Instant horarioDaTransacao = transacao.horarioEvento();
+        long transacoesNaJanela =
+                memoria.contagemNaJanela(JanelasDeTempo.CINCO_MINUTOS, horarioDaTransacao);
+        long ticketMedioCentavos = memoria.ticketMedioCentavos();
+        long limiarDeValorCentavos =
+                Math.round(ticketMedioCentavos * FATOR_SOBRE_O_TICKET_MEDIO);
 
-        boolean muitasTransacoes = contagem > TRANSACOES_NA_JANELA;
-        boolean valorAcimaDoPadrao = transacao.valorCentavos() > limiar;
+        boolean transacoesDemaisNaJanela = transacoesNaJanela > LIMITE_DE_TRANSACOES_NA_JANELA;
+        boolean valorAcimaDoPadraoDoCliente = transacao.valorCentavos() > limiarDeValorCentavos;
 
-        if (!muitasTransacoes || !valorAcimaDoPadrao) {
+        if (!transacoesDemaisNaJanela || !valorAcimaDoPadraoDoCliente) {
             return Optional.empty();
         }
 
         Map<String, Object> valoresEntrada = new LinkedHashMap<>();
-        valoresEntrada.put("contagemJanela5m", contagem);
-        valoresEntrada.put("limiteContagem", TRANSACOES_NA_JANELA);
+        valoresEntrada.put("contagemJanela5m", transacoesNaJanela);
+        valoresEntrada.put("limiteContagem", LIMITE_DE_TRANSACOES_NA_JANELA);
         valoresEntrada.put("valorCentavos", transacao.valorCentavos());
-        valoresEntrada.put("ticketMedioCentavos", ticketMedio);
-        valoresEntrada.put("limiarCentavos", limiar);
+        valoresEntrada.put("ticketMedioCentavos", ticketMedioCentavos);
+        valoresEntrada.put("limiarCentavos", limiarDeValorCentavos);
         valoresEntrada.put("historicoConsiderado", memoria.contagemHistorica());
 
         return Optional.of(new Alerta(

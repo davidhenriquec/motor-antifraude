@@ -3,6 +3,7 @@ package br.com.antifraude.motor.regra;
 import br.com.antifraude.contrato.Alerta;
 import br.com.antifraude.contrato.Severidade;
 import br.com.antifraude.contrato.Transacao;
+import br.com.antifraude.motor.memoria.JanelasDeTempo;
 import br.com.antifraude.motor.memoria.MemoriaDoCliente;
 
 import java.time.Instant;
@@ -11,15 +12,15 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
-public class RegraValorAbsoluto implements Regra {
+public class RegraSomaNaHora implements Regra {
 
-    public static final String ID = "valor-absoluto";
+    public static final String ID = "soma-na-hora";
     public static final int VERSAO = 1;
 
-    private final long limiarDeValorCentavos;
+    private final long limiteDaSomaCentavos;
 
-    public RegraValorAbsoluto(long limiarDeValorCentavos) {
-        this.limiarDeValorCentavos = limiarDeValorCentavos;
+    public RegraSomaNaHora(long limiteDaSomaCentavos) {
+        this.limiteDaSomaCentavos = limiteDaSomaCentavos;
     }
 
     @Override
@@ -34,13 +35,20 @@ public class RegraValorAbsoluto implements Regra {
 
     @Override
     public Optional<Alerta> avaliar(Transacao transacao, MemoriaDoCliente memoria) {
-        if (transacao.valorCentavos() <= limiarDeValorCentavos) {
+        Instant horarioDaTransacao = transacao.horarioEvento();
+        long somaNaUltimaHoraCentavos =
+                memoria.somaNaJanelaCentavos(JanelasDeTempo.UMA_HORA, horarioDaTransacao);
+
+        if (somaNaUltimaHoraCentavos <= limiteDaSomaCentavos) {
             return Optional.empty();
         }
 
         Map<String, Object> valoresEntrada = new LinkedHashMap<>();
-        valoresEntrada.put("valorCentavos", transacao.valorCentavos());
-        valoresEntrada.put("limiarCentavos", limiarDeValorCentavos);
+        valoresEntrada.put("somaCentavos", somaNaUltimaHoraCentavos);
+        valoresEntrada.put("limiteCentavos", limiteDaSomaCentavos);
+        valoresEntrada.put(
+                "transacoesNaJanela",
+                memoria.contagemNaJanela(JanelasDeTempo.UMA_HORA, horarioDaTransacao));
         valoresEntrada.put("dependeDeHistorico", false);
 
         return Optional.of(new Alerta(
@@ -52,8 +60,8 @@ public class RegraValorAbsoluto implements Regra {
                 transacao.valorCentavos(),
                 ID,
                 VERSAO,
-                "sem-janela",
-                Severidade.MEDIA,
+                "60m",
+                Severidade.ALTA,
                 true,
                 valoresEntrada,
                 transacao.horarioEvento(),
