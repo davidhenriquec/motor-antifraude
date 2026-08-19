@@ -254,12 +254,23 @@ particionar por chave de forma nativa. Padrão de fato em instituições finance
 **Trade-off aceito:** complexo de operar. Mitigado com versão gerenciada em produção.
 
 ### Kafka Streams
-**Por quê:** memória local por partição com backup automático, janelas prontas e atomicidade entre
-leitura, atualização de estado e escrita.
-**Trade-offs aceitos:** redistribuição exige reconstruir estado; máquinas deixam de ser
-descartáveis; teto rígido nas 64 partições; curva de aprendizado na serialização.
-**Nota de mecanismo:** o estado sobrevive a falhas pelo *changelog*. O disco persistente é
+
+**Por quê:** memória local por partição com backup automático e atomicidade entre leitura, atualização de memória e
+escrita. **Trade-offs aceitos:** redistribuição exige reconstruir memória; máquinas deixam de ser
+descartáveis; teto rígido nas 64 partições; curva de aprendizado na serialização. **Nota de mecanismo:** a memória
+sobrevive a falhas pelo *changelog*. O disco persistente é
 otimização de tempo de recuperação, **não** requisito de correção.
+
+**Duas correções que a implementação impôs a este item:**
+
+*As janelas prontas não se aplicam ao nosso caso.* Elas resolvem agregação de janela única. Como uma regra precisa
+consultar várias janelas ao mesmo tempo, mais o último valor, mais o registro de deduplicação, optamos por um **registro
+único por cliente** — o que descarta o janelamento pronto e mantém apenas a memória gerenciada e o changelog.
+
+*Existe amplificação de escrita.* O `KeyValueStore` grava **o valor inteiro** no changelog a cada
+`put()`, e fazemos um `put` por transação. O custo de gravação é proporcional ao tamanho da memória, não ao tamanho da
+mudança — e é aqui que as agregações de janela levariam vantagem, porque gravam só o agregado. Mitigado pelo teto de
+tamanho descrito nas limitações.
 
 ### Java 21 + Spring Boot 3
 **Por quê:** ecossistema majoritário do Itaú. Integração nativa com Kafka Streams.
@@ -315,18 +326,45 @@ backup e recuperação.
 
 ## 5. Limitações conhecidas
 
-- **Partição quente.** Um cliente de altíssimo volume sobrecarrega uma partição e **não pode ser
-  dividido**, porque a co-locação é o que faz o desenho funcionar.
-- **Teto de 64 partições.** Ultrapassar exige reparticionamento, destrutivo para o estado local.
-- **Custo do rebalanceamento.**
+### Partição quente — medida
+
+Um cliente de altíssimo volume sobrecarrega uma partição e **não pode ser dividido**, porque a co-locação é o que faz o
+desenho funcionar.
+
+**Onde quebra, medido na implementação:** cada transação acrescenta ~155 bytes à memória do cliente (85 do evento, 70 do
+identificador de deduplicação). Contra o limite de 1 MB por mensagem do Kafka:
+
+```
+1.048.576 ÷ 155 ≈ 6.700 transações na mesma hora
+6.700 ÷ 3.600 s  ≈ 2 transações por segundo no mesmo cliente
+```
+
+**Como quebrava:** não degradava devagar. Estourava com `RecordTooLargeException` e a partição parava de processar.
+
+**Mitigação implementada:** teto de tamanho além do corte por idade — 200 eventos e 500 identificadores por cliente. Se
+um cliente já tem 200 eventos na janela, toda regra de contagem já disparou; guardar o 201º não muda decisão nenhuma. O
+cliente quente passa a **degradar** em vez de derrubar a partição.
+
+**E virou sinal:** a métrica `antifraude.memoria.no.limite` conta transações de clientes que atingiram o teto. É, na
+prática, **o detector de partição quente** — se sair de zero em produção, há um cliente concentrando volume.
+
+**O que continua:** a amplificação de escrita está limitada, não eliminada. Cada transação de um cliente no teto ainda
+grava ~52 KB no changelog. A solução estrutural seria trocar a lista de eventos por contadores por minuto, ao custo dos
+valores individuais que a regra de teste de cartão precisa.
+
+### Demais limitações
+
+- **Teto de 64 partições.** Ultrapassar exige reparticionamento, destrutivo para a memória local.
+- **Custo do rebalanceamento.** Medido de forma indireta: reconstruir a memória de 520 mil transações a partir do
+  changelog levou ~90 segundos no ambiente local.
 - **Os números de capacidade são estimativa** até o teste de carga.
 
 ## 6. Pendente de validação
 
 - [ ] Medir o custo real de CPU por transação e recalibrar o número de máquinas
 - [ ] Medir p99 de ponta a ponta sob carga de pico sustentada
-- [ ] Identificar o gargalo real que aparece primeiro
-- [ ] Validar o tempo de reconstrução do estado após queda de uma máquina
+- [ ] Identificar o gargalo real que aparece primeiro — a amplificação de escrita é candidata
+- [ ] Validar o tempo de reconstrução da memória após queda de uma máquina, com e sem cópia morna
 
 ---
 ---
@@ -897,6 +935,31 @@ e-mail. É lá, e só lá, que mora o disjuntor.
 
 **Cinco das oito regras não precisam de nada externo** — e são as cinco mais eficazes contra fraude
 de cartão.
+
+### Uma nona regra, de natureza diferente
+
+À lista acima somou-se um **limiar absoluto**: acima de um valor configurável (R$ 30.000), alerta independentemente de
+qualquer histórico.
+
+Isso não contradiz o argumento contra limiares absolutos da seção 2.4 — responde outra pergunta:
+
+| Regra    | Pergunta que responde                                               |
+|----------|---------------------------------------------------------------------|
+| Relativa | "Isso é incomum **para essa pessoa**?"                              |
+| Absoluta | "Isso é grande o bastante para errar sair caro, **seja quem for**?" |
+
+A primeira **detecta anomalia**; a segunda **limita perda**. Por isso o número é alto: R$ 5.000 dispararia em toda
+compra de cliente de ticket alto, concentrando incômodo em quem gasta mais — que é exatamente o problema que a regra
+relativa existe para evitar.
+
+**Onde ela é indispensável:**
+
+- **Cobre a partida a frio.** A regra relativa exige histórico mínimo; quem abriu conta ontem ficaria desprotegido.
+- **Não pode ser envenenada.** Se um fraudador deslocou a linha de base com transações pequenas ao longo do tempo, a
+  regra relativa deixa de funcionar. A absoluta continua valendo — e é a mitigação parcial da dívida da mediana.
+
+**Severidade média**, não alta: pergunta ao cliente sem acionar o antifraude, porque não há indício de fraude, apenas
+valor alto.
 
 Calcular internamente é melhor por dois motivos: **está sempre atualizado** e **não depende de
 ninguém**.

@@ -28,7 +28,7 @@ management:
 
 simulador:
   topico: transacoes
-  quantidade-de-clientes: 10000
+  quantidade-de-clientes: 200000
   taxa-por-segundo: 50
   ligado: false
 

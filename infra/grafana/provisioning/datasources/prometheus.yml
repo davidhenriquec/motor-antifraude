@@ -1,0 +1,12 @@
+apiVersion: 1
+
+# Fonte de dados provisionada por arquivo, versionada junto do repositorio.
+# Configurar pela interface seria mais rapido, mas a configuracao se perderia ao recriar o
+# container — e ninguem saberia reproduzir o ambiente.
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true

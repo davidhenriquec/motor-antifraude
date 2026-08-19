@@ -2,20 +2,19 @@ package br.com.antifraude.simulador;
 
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-/** Emite transacoes numa taxa configuravel. Ligar e desligar em tempo de execucao. */
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+
 @Component
 public class GeradorDeCarga {
-
     private static final Logger log = LoggerFactory.getLogger(GeradorDeCarga.class);
 
     private final GeradorDeTransacoes gerador;
@@ -41,7 +40,7 @@ public class GeradorDeCarga {
         taxaPorSegundo.set(taxaInicial);
         agendador = Executors.newSingleThreadScheduledExecutor(
                 r -> Thread.ofPlatform().name("gerador-de-carga").unstarted(r));
-        // Emite em rajadas de 100 ms para nao concentrar tudo no inicio do segundo.
+
         agendador.scheduleAtFixedRate(this::emitirLote, 500, 100, TimeUnit.MILLISECONDS);
         if (ligarNoInicio) {
             ligar();
