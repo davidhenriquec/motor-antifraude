@@ -1,0 +1,69 @@
+# Definicao das regras de deteccao.
+#
+# Este arquivo e a fonte da verdade. O script infra/carregar-regras.sh grava no Mongo, e o motor
+# recarrega sozinho em ate 30 segundos, sem redeploy.
+#
+# Campos disponiveis na condicao:
+#   transacao.valorCentavos  transacao.cidade  transacao.pais  transacao.categoria  transacao.canal
+#   janela5m.contagem        janela5m.somaCentavos
+#   janela60m.contagem       janela60m.somaCentavos
+#   perfil.ticketMedioCentavos  perfil.contagemHistorica
+#   ultimo.cidade
+#   regras['id-de-outra-regra']  -> resultado de outra regra, para regras compostas
+
+regras:
+  - id: velocidade-alta
+    versao: 1
+    descricao: Muitas transacoes em 5 minutos, todas acima do dobro do padrao do cliente
+    habilitada: true
+    severidade: ALTA
+    janela: 5m
+    notificarCliente: true
+    condicao: >
+      perfil.contagemHistorica >= 5 &&
+      janela5m.contagem > 3 &&
+      transacao.valorCentavos > perfil.ticketMedioCentavos * 2
+
+  - id: valor-absoluto
+    versao: 1
+    descricao: Uma unica transacao acima de R$ 5.000 sempre pergunta ao cliente, seja qual for o historico
+    habilitada: true
+    severidade: MEDIA
+    janela: sem-janela
+    notificarCliente: true
+    condicao: transacao.valorCentavos > 500000
+
+  - id: soma-na-hora
+    versao: 1
+    descricao: Acumulado da ultima hora acima do teto, pega o fraudador de ritmo controlado
+    habilitada: true
+    severidade: ALTA
+    janela: 60m
+    notificarCliente: true
+    condicao: janela60m.somaCentavos > 1000000
+
+
+  - id: cidade-diferente-no-ecommerce
+    versao: 1
+    descricao: Compra online partindo de cidade diferente da ultima, com valor acima do padrao
+    habilitada: true
+    severidade: MEDIA
+    janela: sem-janela
+    notificarCliente: true
+    condicao: >
+      transacao.canal == 'ECOMMERCE' &&
+      ultimo.cidade != '' &&
+      transacao.cidade != ultimo.cidade &&
+      transacao.valorCentavos > perfil.ticketMedioCentavos * 3
+
+  - id: combinacao-critica
+    versao: 1
+    descricao: Velocidade alta somada a cidade diferente no ecommerce e quase certamente cartao clonado
+    habilitada: true
+    severidade: ALTA
+    janela: 5m
+    notificarCliente: true
+    condicao: >
+      regras['velocidade-alta'] &&
+      regras['cidade-diferente-no-ecommerce']
+

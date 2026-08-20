@@ -1,0 +1,58 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: motor
+  data:
+    mongodb:
+      uri: mongodb://localhost:27017/antifraude
+  kafka:
+    bootstrap-servers: localhost:9092
+    streams:
+      application-id: motor-de-deteccao
+      properties:
+        # Defesa numero 3 do topico 3. Torna atomicas a leitura, a atualizacao da memoria e a
+        # escrita do alerta — e e o que faz o registro de transacoes ja vistas ser confiavel:
+        # sem isso, a anotacao e a confirmacao de leitura nao sao gravadas juntas.
+        processing.guarantee: exactly_once_v2
+
+        # Copia morna da memoria em outra instancia. O ganho principal nao e a queda rara: e o
+        # deploy, que e evento agendado e provoca redistribuicao toda vez. Com a janela longa de
+        # 30 dias, reconstruir do zero leva minutos.
+        num.standby.replicas: 1
+
+        # Medido: subir de 4 para 12 threads nao mudou a vazao (9.778 contra 9.830 por segundo) e
+        # gastou 56% mais processador. O gargalo esta antes, na gravacao — enquanto ele existir,
+        # threads a mais so disputam a mesma fila. Ver docs/solucao.md, topico 2.
+        num.stream.threads: 4
+
+        # Diretorio da memoria local. Em producao seria volume persistente — e por isso o motor
+        # vira StatefulSet em vez de Deployment.
+        state.dir: ./dados-locais/kafka-streams
+
+        commit.interval.ms: 1000
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  metrics:
+    tags:
+      application: motor
+
+motor:
+  topico-de-entrada: transacoes
+  topico-de-saida: alertas
+  regras:
+    colecao: regras
+
+    # A recarga a quente e o que atende "sem necessidade de redeploy". 30s foi escolhido para que o
+    # interruptor de emergencia seja util: intervalos longos inviabilizam desligar uma regra ruim.
+    intervalo-de-recarga-ms: 30000
+
+logging:
+  level:
+    br.com.antifraude: INFO
+    org.apache.kafka.streams: WARN
