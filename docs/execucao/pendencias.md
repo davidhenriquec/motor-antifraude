@@ -1,6 +1,6 @@
 # O que falta e como será feito
 
-> Estado em: fim do dia 4. Ordem de prioridade, com o **como** de cada item.
+> Estado em: fim do dia 6. Ordem de prioridade, com o **como** de cada item.
 >
 > O raciocínio das decisões está em [../architecture.md](../architecture.md).
 
@@ -83,103 +83,22 @@ regra que lança exceção, e controle de repetição de alerta. As três classe
 
 ---
 
-## Dia 5 — As saídas
+## Dia 5 — As saídas — **concluído**
 
-### 5.1 `notificacao`
+Registro completo em [dia-5.md](dia-5.md).
 
-**Estrutura**, seguindo o padrão do motor:
-
-```
-notificacao/
-├── entrega/      DecisaoDeEntrega, ProvedorSimulado
-├── deduplicacao/ ChaveDeEntrega, RegistroNoRedis
-└── kafka/        ConsumidorDeAlertas
-```
-
-**Diferença importante em relação ao motor:** aqui o consumidor é **explícito**, um método anotado com `@KafkaListener`
-recebendo `Alerta`. Não há memória para gerenciar, então o Kafka Streams não se paga.
-
-**A ordem da deduplicação**, que é o ponto delicado:
-
-1. Chega o alerta
-2. Tenta gravar a chave no Redis com "só grave se ainda não existir", validade de **60 segundos**
-3. Falhou → outro já tratou → descarta
-4. Deu certo → envia push ou e-mail
-5. Estende a validade para **24 horas**
-
-A validade curta existe para que uma queda entre gravar e enviar se conserte sozinha. Gravar direto com 24 horas faria o
-cliente **nunca** ser avisado daquela fraude.
-
-**Resiliência:** disjuntor por dependência, timeout curto, repetição com variação aleatória, e fila morta para o que não
-entregar.
-
-**Se o Redis cair, envia assim mesmo** — melhor duplicar que silenciar — com métrica registrando.
-
-### 5.2 `auditoria`
-
-**Estrutura:**
-
-```
-auditoria/
-├── registro/   RegistroDeAlerta, RepositorioDeAuditoria
-└── kafka/      ConsumidorDeAlertas
-```
-
-**Como:** consumidor comum, gravando no Postgres com **chave única no identificador do alerta**. A idempotência sai de
-graça: o banco recusa a segunda linha, sem lógica nenhuma.
-
-Migração com Flyway criando a tabela particionada por mês.
-
-**Checkpoint do dia:** derrubar o provedor de notificação e provar que a detecção não para e que o alerta interno
-continua saindo.
+`notificacao` com deduplicação de entrega no Redis na ordem certa, disjuntor, repetição com variação e fila morta.
+`auditoria` gravando no Postgres particionado com chave única. Checkpoint cumprido: derrubar o provedor não parou a
+detecção.
 
 ---
 
-## Dia 6 — Observabilidade e carga
+## Dia 6 — Observabilidade e carga — **concluído**
 
-### 6.1 Métricas
+Registro completo em [dia-6.md](dia-6.md).
 
-**Já existem:** transações avaliadas, duplicadas descartadas, alertas gerados.
-
-**Faltam as de negócio**, que são as que diferenciam:
-
-| Métrica                                | O que detecta                                            |
-|----------------------------------------|----------------------------------------------------------|
-| Taxa de disparo **por regra**          | Salto = regra quebrada ou ataque real. A mais importante |
-| Alertas por cliente                    | Fadiga de alerta                                         |
-| Eventos descartados por atraso         | Degradação a montante                                    |
-| Profundidade e **idade** da fila morta | Fila que não drena é um segundo incidente                |
-
-**Cuidado obrigatório:** nenhuma métrica pode usar identificador de cliente ou transação como rótulo. O Prometheus
-tentaria criar milhões de séries e morreria.
-
-### 6.2 Painéis
-
-Dois, porque as perguntas são diferentes:
-
-| Público        | Pergunta          | Conteúdo                            |
-|----------------|-------------------|-------------------------------------|
-| Plantão        | "Está de pé?"     | Fila, latência, erros, disjuntores  |
-| Time de fraude | "Está acertando?" | Taxa por regra, alertas por cliente |
-
-Provisionados por arquivo, versionados no repositório — configuração feita pela interface se perde ao recriar o
-contêiner.
-
-### 6.3 Alerta de ausência
-
-**O que quase ninguém escreve:** se o motor passa 10 minutos sem gerar alerta nenhum, isso é incidente, não sucesso.
-Calibragem **relativa ao tráfego esperado**, porque às 3h o volume cai naturalmente.
-
-### 6.4 Teste de carga
-
-**Como:** script k6 publicando direto no Kafka, medindo de ponta a ponta — da publicação até o alerta aparecer no
-tópico.
-
-**O que registrar no README:** vazão sustentada, p99, e **qual gargalo apareceu primeiro**.
-
-É o item de maior retorno do dia: troca a estimativa de ~2.500 transações por segundo por thread por um número medido.
-Se o real for muito diferente, o dimensionamento de cinco máquinas precisa ser recalculado — e ter feito a conta e
-depois corrigido é uma história melhor que ter acertado por sorte.
+Métricas de negócio, dois painéis provisionados por arquivo, sete regras de alerta com procedimento, e o teste de carga
+que corrigiu o modelo de capacidade — o gargalo é escrita no changelog, não CPU.
 
 ---
 

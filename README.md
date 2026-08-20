@@ -166,27 +166,56 @@ curl -X POST "http://localhost:8081/regras/velocidade-alta/desligar"
 
 Desligar uma regra **desliga em cascata** as compostas que dependem dela.
 
+## Observabilidade
+
+Dois painéis provisionados por arquivo, em `infra/grafana/dashboards/`:
+
+| Painel                | Pergunta que responde | Endereço                                    |
+|-----------------------|-----------------------|---------------------------------------------|
+| Plantão SRE           | "está de pé?"         | http://localhost:3000/d/antifraude-plantao  |
+| Qualidade da detecção | "está acertando?"     | http://localhost:3000/d/antifraude-deteccao |
+
+E sete regras de alerta em `infra/prometheus/regras-de-alerta.yml`, cada uma com o procedimento de plantão. A mais
+importante é a de **ausência de alertas**: se há tráfego entrando e nada saindo por 10 minutos, isso é incidente — é a
+falha que nenhum indicador técnico mostra.
+
+## Números medidos
+
+Todos em uma instância, MacBook de 10 núcleos, tudo em Docker. **Não representam produção** — o Kafka divide o mesmo SSD
+com o estado local, sob virtualização.
+
+|                                    |                                                 |
+|------------------------------------|-------------------------------------------------|
+| Vazão sustentada, estado limpo     | **8.000 tx/s** — a média exigida pelo enunciado |
+| Pico momentâneo                    | 28.000 tx/s                                     |
+| Latência de **processamento**      | p50 **0,43 ms** · p99 11 ms                     |
+| Latência **ponta a ponta** (o SLA) | p50 453 ms · p99 8,0 s                          |
+| Taxa de alerta                     | 0,11%                                           |
+
+**A descoberta mais útil:** o motor decide em menos de meio milissegundo, e mais de 99% da latência é espera em fila.
+Acompanhar a vazão cumpre a capacidade; **cumprir a latência exige folga**.
+
+**O gargalo não é CPU.** No teste, 90% dos núcleos ficaram ociosos enquanto a fila crescia — as threads esperavam o
+broker aceitar escrita. Cada transação de 192 bytes provoca ~1.400 bytes de changelog, uma amplificação de **7,5×**, que
+cresce com o histórico do cliente. O raciocínio completo está em [docs/execucao/dia-6.md](docs/execucao/dia-6.md).
+
 ## Estado atual
 
-Dias 1 a 4 de 7 concluídos, com 60 testes automatizados.
+Dias 1 a 6 de 7 concluídos, com 69 testes automatizados — 60 no motor e 9 no `notificacao`.
 
-**Regras sem redeploy — verificado em execução.** Alterar um limiar no YAML e rodar o script fez a nova versão valer em
-~20 segundos, com o motor no ar; adicionar uma regra inédita levou 19 segundos até ela disparar. Uma regra com campo
-inexistente foi recusada no carregamento e as demais continuaram rodando.
+| Verificado em execução      |                                                                                   |
+|-----------------------------|-----------------------------------------------------------------------------------|
+| Particionamento             | O mesmo cliente cai sempre na mesma partição; 64 partições usadas                 |
+| Teto de memória             | 520 mil transações sem `RecordTooLargeException`                                  |
+| Resistência a envenenamento | Ataque de 30 transações: a regra reconheceu as 30. Antes emudecia na 12ª          |
+| Repetição de alerta         | Ataque que gerava 16 alertas gera 1. Café de R$ 5 após o alerta ficou em silêncio |
+| Regras sem redeploy         | Regra nova valendo em 19 s, com o sistema no ar                                   |
+| Desligamento em cascata     | Desligar `velocidade-alta` derrubou junto a regra composta                        |
+| Regra quebrada              | Recusada no carregamento; as demais continuaram                                   |
+| Queda do provedor           | Detecção e auditoria seguiram; disjuntor abriu; fila morta acumulou               |
+| Alerta de ausência          | 188 tx/s entrando, zero alertas: condição verdadeira                              |
 
-**Particionamento verificado.** O mesmo cliente cai sempre na mesma partição (6 de 6 publicações do `cli-000042` foram
-para a partição 60), e clientes distintos se distribuem pelas 64 partições.
-
-**Teto de memória verificado.** 520.153 transações reprocessadas sem `RecordTooLargeException` após o limite de 200
-eventos e 500 identificadores por cliente.
-
-**Resistência a envenenamento verificada.** Num ataque de 30 transações fraudulentas, a regra de velocidade reconheceu
-as 30 e o ticket médio permaneceu congelado. Antes da correção ela emudecia na 12ª.
-
-**Repetição de alerta corrigida.** Um ataque que gerava 16 alertas hoje gera 1. Um café de R$ 5 comprado depois do
-alerta deixou de gerar alerta de severidade ALTA.
-
-**Falta:** `notificacao` e `auditoria` (dia 5), observabilidade e teste de carga (dia 6).
+**Falta:** documentação final e roteiro de apresentação (dia 7).
 
 ## Uso de inteligência artificial
 

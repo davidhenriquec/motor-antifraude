@@ -143,7 +143,7 @@ produz esse padrão, e sem caso de teste não havia como afirmar se a regra esta
 | Café depois do alerta              | Silêncio, com o contador de suprimidos em 2                                 |
 | Três compras de R$ 6.000           | Três alertas — cada uma é um evento próprio                                 |
 
-60 testes automatizados.
+69 testes automatizados: 60 no motor e 9 no `notificacao`.
 
 ---
 

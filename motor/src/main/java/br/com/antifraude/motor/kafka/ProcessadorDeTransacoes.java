@@ -10,6 +10,7 @@ import br.com.antifraude.motor.memoria.RepositorioNoKafkaStreams;
 import br.com.antifraude.motor.regra.FonteDeRegras;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import org.apache.kafka.streams.processor.api.Processor;
 import org.apache.kafka.streams.processor.api.ProcessorContext;
 import org.apache.kafka.streams.processor.api.Record;
@@ -17,6 +18,8 @@ import org.apache.kafka.streams.state.KeyValueStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.HashSet;
 import java.util.Set;
 
@@ -33,6 +36,9 @@ public class ProcessadorDeTransacoes implements Processor<String, Transacao, Str
     private Counter transacoesDuplicadas;
     private Counter alertasGerados;
     private Counter memoriasNoTeto;
+    private Counter transacoesComAlerta;
+    private Timer latenciaDeProcessamento;
+    private Timer latenciaPontaAPonta;
     private final Set<String> regrasJaRelatadas = new HashSet<>();
 
     public ProcessadorDeTransacoes(FonteDeRegras fonteDeRegras, MeterRegistry metricas) {
@@ -61,6 +67,33 @@ public class ProcessadorDeTransacoes implements Processor<String, Transacao, Str
                 .description("Transacoes de clientes cuja memoria atingiu o teto de eventos")
                 .register(metricas);
 
+        this.transacoesComAlerta = Counter.builder("antifraude.transacoes.com.alerta")
+                .description("Transacoes que produziram ao menos um alerta. Denominador da taxa de disparo")
+                .register(metricas);
+
+        // Quanto o MOTOR leva. Nao inclui espera em fila: mede so a avaliacao.
+        this.latenciaDeProcessamento = Timer.builder("antifraude.latencia.processamento")
+                .description("Tempo dentro do motor: buscar memoria, avaliar regras, salvar")
+                .publishPercentileHistogram()
+                .minimumExpectedValue(Duration.ofNanos(100_000))
+                .maximumExpectedValue(Duration.ofSeconds(1))
+                .register(metricas);
+
+        // O SLA do enunciado. Inclui o tempo que a transacao esperou na fila, que e onde o
+        // orcamento de 500ms costuma ir embora. Teto alto de proposito: com teto baixo, tudo
+        // que estoura cai no ultimo balde e os percentis mentem, todos iguais ao teto.
+        this.latenciaPontaAPonta = Timer.builder("antifraude.latencia.ponta.a.ponta")
+                .description("Do horario do evento na origem ate a decisao das regras")
+                .publishPercentileHistogram()
+                .serviceLevelObjectives(
+                        Duration.ofMillis(100),
+                        Duration.ofMillis(250),
+                        Duration.ofMillis(500),
+                        Duration.ofSeconds(1))
+                .minimumExpectedValue(Duration.ofMillis(1))
+                .maximumExpectedValue(Duration.ofMinutes(5))
+                .register(metricas);
+
         log.info("Tarefa {} assumida com {} regra(s) ativa(s)", contexto.taskId(), fonteDeRegras.regrasAtivas().size());
     }
 
@@ -71,7 +104,10 @@ public class ProcessadorDeTransacoes implements Processor<String, Transacao, Str
             return;
         }
 
+        long inicioDoProcessamento = System.nanoTime();
         ResultadoDaAvaliacao resultado = avaliador.avaliar(transacao);
+        latenciaDeProcessamento.record(
+                System.nanoTime() - inicioDoProcessamento, java.util.concurrent.TimeUnit.NANOSECONDS);
 
         if (resultado.ehDuplicada()) {
             transacoesDuplicadas.increment();
@@ -79,6 +115,8 @@ public class ProcessadorDeTransacoes implements Processor<String, Transacao, Str
         }
 
         transacoesAvaliadas.increment();
+        latenciaPontaAPonta.record(
+                Duration.between(transacao.horarioEvento(), Instant.now()).abs());
 
         if (resultado.memoriaAtingiuOTeto()) {
             memoriasNoTeto.increment();
@@ -98,8 +136,17 @@ public class ProcessadorDeTransacoes implements Processor<String, Transacao, Str
             }
         }
 
+        if (resultado.temAlertas()) {
+            transacoesComAlerta.increment();
+        }
+
         for (Alerta alerta : resultado.alertas()) {
             alertasGerados.increment();
+            metricas.counter(
+                            "antifraude.alertas.por.regra",
+                            "regra", alerta.regraId(),
+                            "severidade", alerta.severidade().name())
+                    .increment();
             log.info(
                     "ALERTA regra={} v{} severidade={} cliente={} valor={} entradas={}",
                     alerta.regraId(),

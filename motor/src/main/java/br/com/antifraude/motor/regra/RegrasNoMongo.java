@@ -1,5 +1,7 @@
 package br.com.antifraude.motor.regra;
 
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,10 +32,15 @@ public class RegrasNoMongo implements FonteDeRegras {
     public RegrasNoMongo(
             MongoTemplate mongo,
             CompiladorCel compilador,
+            MeterRegistry metricas,
             @Value("${motor.regras.colecao}") String colecao) {
         this.mongo = mongo;
         this.compilador = compilador;
         this.colecao = colecao;
+
+        Gauge.builder("antifraude.regras.ativas", regrasCompiladas, referencia -> referencia.get().size())
+                .description("Quantas regras estao no conjunto ativo do motor")
+                .register(metricas);
     }
 
     @Override

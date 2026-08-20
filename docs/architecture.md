@@ -187,6 +187,36 @@ descontando a transação atômica — folga de ~1,4x sobre o pico.
 
 **Estimativa de ordem de grandeza, não medição.**
 
+#### O que o teste de carga do dia 6 mostrou
+
+A conta acima estava **conservadora no que media e cega para o que importava**.
+
+|                             | Estimado   | Medido                   |
+|-----------------------------|------------|--------------------------|
+| Processamento por transação | ~400 µs    | **~430 µs (p50)**        |
+| Por thread                  | 2.500 tx/s | ~2.300 tx/s              |
+| **O que limitou de fato**   | CPU        | **escrita no changelog** |
+
+O tempo de CPU estava certo. **O modelo estava errado por considerar só CPU.** No teste, a máquina ficou com 90% dos
+núcleos ociosos enquanto a fila crescia: as threads estavam bloqueadas esperando o broker aceitar escrita.
+
+**A conta que faltava:**
+
+|                                    |                    |
+|------------------------------------|--------------------|
+| Transação de entrada               | 192 bytes          |
+| Escrita no changelog por transação | ~1.400–1.850 bytes |
+| Amplificação                       | **7,5× a 9,7×**    |
+| Banda de changelog a 8.000 tx/s    | ~14 MB/s           |
+| Banda de changelog a 25.000 tx/s   | **~44 MB/s**       |
+
+E a amplificação **não é constante**: cresce com o histórico do cliente, porque cada `put()` grava a memória inteira e
+não o que mudou. Consequência prática medida: com estado limpo a mesma máquina sustentou 8.000 tx/s; com milhões de
+transações acumuladas, caiu para ~3.000.
+
+**A conclusão que corrige o modelo:** o dimensionamento precisa de duas contas, não uma — CPU **e**
+banda de escrita. E a segunda degrada com o tempo, o que a primeira não faz.
+
 ### 2.6 O orçamento de latência
 
 | Etapa | Custo estimado (p99) |
@@ -200,6 +230,20 @@ descontando a transação atômica — folga de ~1,4x sobre o pico.
 | **Total** | **~80 ms** |
 
 **A descoberta mais útil deste tópico:** o sistema *pensa* em ~5 ms e o dado *anda* em ~75 ms.
+
+**Confirmado por medição, e mais extremo do que a estimativa.** Com as duas latências separadas em métricas distintas, a
+2.000 transações por segundo:
+
+|                            | p50         | p99   |
+|----------------------------|-------------|-------|
+| Processamento — só o motor | **0,43 ms** | 11 ms |
+| Ponta a ponta — o SLA      | **453 ms**  | 8,0 s |
+
+O motor decide em menos de meio milissegundo. **Mais de 99% da latência é espera em fila.**
+
+Daí a regra que governa o dimensionamento: acompanhar a vazão cumpre a capacidade, mas **cumprir a latência exige
+folga**. Um sistema que processa exatamente o que recebe mantém uma fila permanente — e fila permanente é SLA estourado,
+mesmo com a vazão em dia.
 
 Não há linha de enriquecimento porque **o motor não busca dado nenhum** — o perfil comportamental é
 calculado por ele mesmo (tópico 4). A linha de avaliação das regras é o que limita a quantidade de

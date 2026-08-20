@@ -1,0 +1,105 @@
+groups:
+  - name: antifraude-deteccao
+    rules:
+
+      # O alerta que quase ninguem escreve. Um bug que faz a deteccao parar e completamente
+      # silencioso: fila normal, latencia boa, log limpo. Ausencia de alerta e sintoma, nao sucesso.
+      #
+      # A condicao e RELATIVA ao trafego: exige que haja transacao chegando. Sem isso, dispararia
+      # toda madrugada, quando o volume cai naturalmente.
+      - alert: MotorParouDeGerarAlertas
+        expr: |
+          sum(rate(antifraude_transacoes_avaliadas_total[10m])) > 10
+          and
+          sum(rate(antifraude_alertas_gerados_total[10m])) == 0
+        for: 10m
+        labels:
+          severidade: critica
+          time: antifraude
+        annotations:
+          resumo: "O motor processa transacoes ha 10 minutos e nao gerou nenhum alerta"
+          acao: >
+            Verificar se as regras foram carregadas (antifraude_regras_ativas) e se a ultima
+            recarga recusou alguma. Depois, reprocessar o periodo pelo topico, que retem 7 dias.
+
+      # Regra quebrada ou ataque em curso. As duas exigem acao imediata, mas opostas.
+      - alert: TaxaDeDisparoDeRegraDisparou
+        expr: |
+          sum by (regra) (rate(antifraude_alertas_por_regra_total[10m]))
+          >
+          5 * sum by (regra) (rate(antifraude_alertas_por_regra_total[6h] offset 10m))
+        for: 5m
+        labels:
+          severidade: alta
+          time: antifraude
+        annotations:
+          resumo: "A regra {{ $labels.regra }} esta disparando 5x acima da linha de base"
+          acao: >
+            Remediar primeiro, entender depois: POST /regras/{{ $labels.regra }}/desligar.
+            Para separar regra quebrada de ataque real, verificar se a regra mudou nas ultimas
+            horas (git log), se a taxa de deduplicacao subiu junto, e se o salto e numa regra so.
+
+      - alert: NenhumaRegraAtiva
+        expr: max(antifraude_regras_ativas) == 0
+        for: 2m
+        labels:
+          severidade: critica
+          time: antifraude
+        annotations:
+          resumo: "O motor esta com ZERO regras ativas: nada sera detectado"
+          acao: "Verificar a colecao de regras no Mongo e o log da ultima recarga."
+
+  - name: antifraude-operacao
+    rules:
+
+      - alert: LatenciaAcimaDoSLA
+        expr: |
+          histogram_quantile(
+            0.99, sum(rate(antifraude_latencia_ponta_a_ponta_seconds_bucket[5m])) by (le)
+          ) > 0.5
+        for: 5m
+        labels:
+          severidade: alta
+          time: sre
+        annotations:
+          resumo: "p99 da deteccao acima dos 500ms do SLA"
+          acao: >
+            Verificar se a entrada subiu (pico legitimo), se as pausas de GC subiram (pressao de
+            memoria), ou se alguma regra ficou cara. Nao existe integracao sincrona no motor,
+            entao dependencia lenta esta fora da arvore.
+
+      # Fila morta que nao drena e um SEGUNDO incidente, escondido dentro do primeiro.
+      - alert: FilaMortaNaoDrena
+        expr: max(antifraude_notificacao_fila_morta_idade_segundos) > 1800
+        for: 5m
+        labels:
+          severidade: alta
+          time: sre
+        annotations:
+          resumo: "A mensagem mais antiga da fila morta tem mais de 30 minutos"
+          acao: "O reprocessamento nao esta funcionando. Verificar o provedor e o disjuntor."
+
+      - alert: DisjuntorAberto
+        expr: resilience4j_circuitbreaker_state{name="provedorDeNotificacao",state="open"} == 1
+        for: 2m
+        labels:
+          severidade: media
+          time: sre
+        annotations:
+          resumo: "O provedor de notificacao esta fora e o disjuntor abriu"
+          acao: >
+            A degradacao e por desenho: a deteccao continua e os alertas internos seguem saindo.
+            Confirmar que a fila morta esta acumulando e comunicar o time do provedor.
+
+      - alert: ClienteQuenteNaParticao
+        expr: rate(antifraude_memoria_no_limite_total[10m]) > 100
+        for: 10m
+        labels:
+          severidade: media
+          time: sre
+        annotations:
+          resumo: "Muitos clientes com a memoria no teto de eventos"
+          acao: >
+            Particao quente: um cliente de altissimo volume nao pode ser dividido, porque a
+            co-locacao e o que faz o desenho funcionar. Avaliar se e cliente legitimo de alto
+            volume ou ataque concentrado.
