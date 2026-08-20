@@ -22,7 +22,9 @@ spring:
         # 30 dias, reconstruir do zero leva minutos.
         num.standby.replicas: 1
 
-        # Threads por instancia = vCPUs, porque o trabalho e de processador.
+        # Medido: subir de 4 para 12 threads nao mudou a vazao (9.778 contra 9.830 por segundo) e
+        # gastou 56% mais processador. O gargalo esta antes, na gravacao — enquanto ele existir,
+        # threads a mais so disputam a mesma fila. Ver docs/solucao.md, topico 2.
         num.stream.threads: 4
 
         # Diretorio da memoria local. Em producao seria volume persistente — e por isso o motor
