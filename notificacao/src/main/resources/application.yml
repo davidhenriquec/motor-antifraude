@@ -1,0 +1,75 @@
+server:
+  port: 8082
+
+spring:
+  application:
+    name: notificacao
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      timeout: 2s
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.value.default.type: br.com.antifraude.contrato.Alerta
+        spring.json.trusted.packages: br.com.antifraude.contrato
+      max-poll-records: 50
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+    listener:
+      ack-mode: record
+      concurrency: 4
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      provedorDeNotificacao:
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 20
+        minimum-number-of-calls: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 20s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+  retry:
+    instances:
+      provedorDeNotificacao:
+        max-attempts: 3
+        wait-duration: 200ms
+        enable-exponential-backoff: true
+        exponential-backoff-multiplier: 2
+        enable-randomized-wait: true
+        randomized-wait-factor: 0.5
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  health:
+    circuitbreakers:
+      enabled: true
+  metrics:
+    tags:
+      application: notificacao
+
+notificacao:
+  topico-de-alertas: alertas
+  topico-fila-morta: notificacoes-dlq
+  grupo: servico-de-notificacao
+  deduplicacao:
+    reserva-em-segundos: 60
+    confirmacao-em-horas: 24
+  provedor:
+    latencia-minima-ms: 5
+    latencia-maxima-ms: 40
+
+logging:
+  level:
+    br.com.antifraude: INFO

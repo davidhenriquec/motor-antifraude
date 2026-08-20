@@ -1,0 +1,40 @@
+server:
+  port: 8083
+
+spring:
+  application:
+    name: auditoria
+  datasource:
+    url: jdbc:postgresql://localhost:5432/auditoria
+    username: antifraude
+    password: antifraude
+  flyway:
+    enabled: true
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.value.default.type: br.com.antifraude.contrato.Alerta
+        spring.json.trusted.packages: br.com.antifraude.contrato
+    listener:
+      ack-mode: record
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  metrics:
+    tags:
+      application: auditoria
+
+auditoria:
+  topico-de-alertas: alertas
+  grupo: consumidor-de-auditoria
+
+logging:
+  level:
+    br.com.antifraude: INFO
