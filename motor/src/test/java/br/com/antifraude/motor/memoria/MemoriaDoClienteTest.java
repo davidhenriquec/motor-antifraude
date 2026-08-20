@@ -157,6 +157,30 @@ class MemoriaDoClienteTest {
         }
 
         @Test
+        @DisplayName("a cidade anterior ignora a propria transacao que esta sendo avaliada")
+        void cidadeAnteriorIgnoraATransacaoAtual() {
+            Transacao atual = transacao(1_000, AGORA, "Recife");
+            MemoriaDoCliente memoria = registrarTodas(transacao(1_000, AGORA.minus(1, ChronoUnit.HOURS), "Sao Paulo"))
+                    .registrarEvento(atual);
+
+            assertThat(memoria.ultimaCidade())
+                    .as("a ultima cidade ja e a da transacao atual")
+                    .isEqualTo("Recife");
+            assertThat(memoria.cidadeAntesDe(AGORA))
+                    .as("mas a regra de geografia precisa saber de onde ele vinha")
+                    .isEqualTo("Sao Paulo");
+        }
+
+        @Test
+        @DisplayName("sem evento anterior, a cidade anterior e nula")
+        void semEventoAnteriorNaoHaCidade() {
+            MemoriaDoCliente memoria =
+                    MemoriaDoCliente.vazia().registrarEvento(transacao(1_000, AGORA, "Recife"));
+
+            assertThat(memoria.cidadeAntesDe(AGORA)).isNull();
+        }
+
+        @Test
         @DisplayName("evento que chega atrasado nao sobrescreve a ultima cidade")
         void atrasadoNaoSobrescreveUltimaCidade() {
             MemoriaDoCliente memoria = registrarTodas(

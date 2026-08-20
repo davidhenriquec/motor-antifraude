@@ -139,25 +139,54 @@ No **Kafka UI** (http://localhost:8090): `alertas → Messages` mostra o JSON de
 
 E no log do motor, `grep ALERTA`.
 
+## As regras de detecção
+
+Vivem em [regras/regras.yml](regras/regras.yml), são carregadas no Mongo e **recarregadas pelo motor a cada 30
+segundos — sem redeploy**.
+
+| Regra                           | Severidade | Dispara quando                                                                                                   |
+|---------------------------------|------------|------------------------------------------------------------------------------------------------------------------|
+| `velocidade-alta`               | ALTA       | Cliente com 5+ transações de histórico faz mais de 3 em 5 minutos, e o valor passa do dobro do ticket médio dele |
+| `valor-absoluto`                | MÉDIA      | Uma única transação passa de R$ 5.000                                                                            |
+| `soma-na-hora`                  | ALTA       | A soma dos últimos 60 minutos passa de R$ 10.000                                                                 |
+| `cidade-diferente-no-ecommerce` | MÉDIA      | Compra online de cidade diferente da anterior, acima do triplo do ticket médio                                   |
+| `combinacao-critica`            | ALTA       | As duas primeiras condições acima na mesma transação                                                             |
+
+Para alterar ou adicionar, edite o YAML e rode:
+
+```bash
+./infra/carregar-regras.sh
+```
+
+Para desligar uma regra na hora, sem esperar os 30 segundos:
+
+```bash
+curl -X POST "http://localhost:8081/regras/velocidade-alta/desligar"
+```
+
+Desligar uma regra **desliga em cascata** as compostas que dependem dela.
+
 ## Estado atual
 
-Dias 1 a 3 de 7 concluídos: infraestrutura, contrato do evento, simulador e o motor com memória por cliente, três regras
-e 44 testes.
+Dias 1 a 4 de 7 concluídos, com 60 testes automatizados.
 
-**Particionamento verificado:** o mesmo cliente cai sempre na mesma partição (6 de 6 publicações do
-`cli-000042` foram para a partição 60), e clientes distintos se distribuem por todas as 64 partições, com média de 25,5
-mensagens por partição em uma amostra de 1.632.
+**Regras sem redeploy — verificado em execução.** Alterar um limiar no YAML e rodar o script fez a nova versão valer em
+~20 segundos, com o motor no ar; adicionar uma regra inédita levou 19 segundos até ela disparar. Uma regra com campo
+inexistente foi recusada no carregamento e as demais continuaram rodando.
 
-**Teto de memória verificado:** 520.153 transações reprocessadas sem `RecordTooLargeException` após a introdução do
-limite de 200 eventos e 500 identificadores por cliente.
+**Particionamento verificado.** O mesmo cliente cai sempre na mesma partição (6 de 6 publicações do `cli-000042` foram
+para a partição 60), e clientes distintos se distribuem pelas 64 partições.
 
-**Resistência a envenenamento verificada:** num ataque de 30 transações fraudulentas contra cliente novo, a regra de
-velocidade disparou nas 30 e o ticket médio permaneceu congelado. Antes da correção, ela emudecia na 12ª. O raciocínio
-está no tópico 4 de
-[docs/architecture.md](docs/architecture.md).
+**Teto de memória verificado.** 520.153 transações reprocessadas sem `RecordTooLargeException` após o limite de 200
+eventos e 500 identificadores por cliente.
 
-**Ainda fixo em código:** as regras são beans do Spring injetados na subida. Torná-las configuráveis sem redeploy é o
-dia 4.
+**Resistência a envenenamento verificada.** Num ataque de 30 transações fraudulentas, a regra de velocidade reconheceu
+as 30 e o ticket médio permaneceu congelado. Antes da correção ela emudecia na 12ª.
+
+**Repetição de alerta corrigida.** Um ataque que gerava 16 alertas hoje gera 1. Um café de R$ 5 comprado depois do
+alerta deixou de gerar alerta de severidade ALTA.
+
+**Falta:** `notificacao` e `auditoria` (dia 5), observabilidade e teste de carga (dia 6).
 
 ## Uso de inteligência artificial
 

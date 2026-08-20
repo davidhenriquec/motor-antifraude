@@ -4,6 +4,8 @@ import br.com.antifraude.contrato.Alerta;
 import br.com.antifraude.contrato.Transacao;
 import br.com.antifraude.motor.memoria.MemoriaDoCliente;
 
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 public interface Regra {
@@ -13,4 +15,13 @@ public interface Regra {
     int versao();
 
     Optional<Alerta> avaliar(Transacao transacao, MemoriaDoCliente memoria);
+
+    default Optional<Alerta> avaliar(
+            Transacao transacao, MemoriaDoCliente memoria, Map<String, Boolean> resultadosAnteriores) {
+        return avaliar(transacao, memoria);
+    }
+
+    default List<String> dependeDe() {
+        return List.of();
+    }
 }

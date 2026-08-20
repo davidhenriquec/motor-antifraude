@@ -4,7 +4,8 @@ import br.com.antifraude.contrato.Alerta;
 import br.com.antifraude.contrato.Canal;
 import br.com.antifraude.contrato.Severidade;
 import br.com.antifraude.contrato.Transacao;
-import br.com.antifraude.motor.regra.RegraVelocidadeAlta;
+import br.com.antifraude.motor.regra.FonteDeRegras;
+import br.com.antifraude.motor.regra.RegrasDeTeste;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -18,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 import java.util.UUID;
 
@@ -42,7 +44,7 @@ class TopologiaConfigTest {
                 construtor,
                 mapper,
                 new SimpleMeterRegistry(),
-                List.of(new RegraVelocidadeAlta()),
+                FonteDeRegras.fixa(List.of(RegrasDeTeste.velocidadeAlta())),
                 ENTRADA,
                 SAIDA,
                 false);
@@ -99,7 +101,7 @@ class TopologiaConfigTest {
 
         Alerta primeiro = alertas.getFirst();
         assertThat(primeiro.clienteId()).isEqualTo(CLIENTE);
-        assertThat(primeiro.regraId()).isEqualTo(RegraVelocidadeAlta.ID);
+        assertThat(primeiro.regraId()).isEqualTo(RegrasDeTeste.VELOCIDADE_ALTA);
         assertThat(primeiro.severidade()).isEqualTo(Severidade.ALTA);
         assertThat(primeiro.notificarCliente()).isTrue();
     }
@@ -117,16 +119,18 @@ class TopologiaConfigTest {
         Alerta alerta = saida.readValuesToList().getFirst();
 
         assertThat(alerta.valoresEntrada())
-                .containsKeys(
-                        "contagemJanela5m",
-                        "limiteContagem",
-                        "valorCentavos",
-                        "ticketMedioCentavos",
-                        "limiarCentavos",
-                        "historicoConsiderado");
+                .as("o alerta precisa explicar sozinho por que disparou")
+                .containsKeys("condicao", "janela5m", "janela60m", "perfil");
 
-        long limiar = ((Number) alerta.valoresEntrada().get("limiarCentavos")).longValue();
-        assertThat(alerta.valorCentavos()).isGreaterThan(limiar);
+        assertThat(alerta.valoresEntrada().get("condicao").toString())
+                .contains("perfil.ticketMedioCentavos");
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> perfil = (Map<String, Object>) alerta.valoresEntrada().get("perfil");
+        long ticketMedio = ((Number) perfil.get("ticketMedioCentavos")).longValue();
+        assertThat(alerta.valorCentavos())
+                .as("a transacao precisa estar acima do dobro do padrao do cliente")
+                .isGreaterThan(ticketMedio * 2);
     }
 
     @Test

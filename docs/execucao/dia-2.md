@@ -21,10 +21,10 @@ comportamento antigo, última cidade e horário, e o registro de transações j�
 
 **Duas regras**, com lógicas deliberadamente diferentes para provar a abstração:
 
-| Regra                 | Como decide                                               | Severidade |
-|-----------------------|-----------------------------------------------------------|------------|
-| `RegraVelocidadeAlta` | Contagem na janela **e** valor acima do padrão do cliente | ALTA       |
-| `RegraValorAbsoluto`  | Valor acima de um limiar fixo, sem consultar nada         | MÉDIA      |
+| Regra             | Como decide                                               | Severidade |
+|-------------------|-----------------------------------------------------------|------------|
+| `velocidade-alta` | Contagem na janela **e** valor acima do padrão do cliente | ALTA       |
+| `valor-absoluto`  | Valor acima de um limiar fixo, sem consultar nada         | MÉDIA      |
 
 **Trinta e três testes automatizados.**
 
@@ -237,8 +237,10 @@ A segunda organiza por funcionalidade:
 motor/
 ├── memoria/     MemoriaDoCliente, EventoRecente, JanelasDeTempo, LimitesDaMemoria,
 │                ParametrosDoTicketMedio, RepositorioDeMemoria, RepositorioNoKafkaStreams
-├── regra/       Regra, RegraVelocidadeAlta, RegraValorAbsoluto, RegraSomaNaHora, RegrasConfig
-├── deteccao/    AvaliadorDeTransacao, ResultadoDaAvaliacao
+├── regra/       Regra, RegraDeclarativa, CompiladorCel, ContextoDaRegra, FonteDeRegras,
+│                RegrasNoMongo, OrdenadorDeRegras, DependenciasDaCondicao, RegrasConfig
+├── deteccao/    AvaliadorDeTransacao, ResultadoDaAvaliacao, FalhaDeRegra
+├── admin/       ControladorDeRegras
 └── kafka/       TopologiaConfig, ProcessadorDeTransacoes, SerdeJson
 ```
 
@@ -293,9 +295,9 @@ que não existia mais.
 
 ## Pendências e riscos
 
-**As regras estão fixas em código.** `RegrasConfig` registra as três como beans, e o Spring injeta a lista **uma vez, na
-subida**. Mudar uma regra hoje exige redeploy. É proposital para o dia 2, e o dia 4 resolve — mas exige trocar
-`List<Regra>` por uma fonte consultável.
+**As regras estavam fixas em código** até o fim do dia 3. O dia 4 substituiu as três classes Java por definições em YAML
+carregadas no Mongo e avaliadas em CEL, atrás da interface `FonteDeRegras`. As classes `RegraVelocidadeAlta`,
+`RegraValorAbsoluto` e `RegraSomaNaHora` foram removidas: o comportamento delas hoje vive em `regras/regras.yml`.
 
 **A linha de base é média, e a arquitetura decidiu mediana.** A média móvel resolveu o esquecimento, não a resistência a
 envenenamento. O ataque **agressivo** foi fechado depois, excluindo da base a transação que gerou alerta — antes disso a

@@ -4,6 +4,9 @@ server:
 spring:
   application:
     name: motor
+  data:
+    mongodb:
+      uri: mongodb://localhost:27017/antifraude
   kafka:
     bootstrap-servers: localhost:9092
     streams:
@@ -41,10 +44,11 @@ motor:
   topico-de-entrada: transacoes
   topico-de-saida: alertas
   regras:
-    valor-absoluto:
-      limiar-centavos: 3000000
-    soma-na-hora:
-      limite-centavos: 1000000
+    colecao: regras
+
+    # A recarga a quente e o que atende "sem necessidade de redeploy". 30s foi escolhido para que o
+    # interruptor de emergencia seja util: intervalos longos inviabilizam desligar uma regra ruim.
+    intervalo-de-recarga-ms: 30000
 
 logging:
   level:

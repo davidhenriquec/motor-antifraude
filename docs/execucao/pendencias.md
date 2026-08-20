@@ -1,46 +1,21 @@
 # O que falta e como será feito
 
-> Estado em: fim do dia 2. Ordem de prioridade, com o **como** de cada item.
+> Estado em: fim do dia 4. Ordem de prioridade, com o **como** de cada item.
 >
 > O raciocínio das decisões está em [../architecture.md](../architecture.md).
 
 ---
 
-## Decisões abertas, antes de codar
+## Decisões abertas
 
-Três coisas pequenas que travam ou sujam o que vem depois.
-
-### 1. `FonteDeRegras` — agora ou no dia 4
-
-Hoje `TopologiaConfig` recebe `List<Regra>` injetada pelo Spring **uma vez, na subida**. Para a recarga a cada 30
-segundos funcionar, a lista não pode ser um retrato fixo.
-
-**Como resolver:** trocar a `List<Regra>` por uma interface.
-
-```java
-public interface FonteDeRegras {
-    List<Regra> regrasAtivas();
-}
-```
-
-Hoje, uma implementação devolve a lista fixa. No dia 4, outra devolve o que veio do Mongo — **e a fiação da topologia
-não muda**.
-
-**Ganho colateral:** resolve a atomicidade da troca, que está registrada como pendência de validação. Se a fonte devolve
-uma lista imutável e a recarga apenas troca a referência, quem estiver avaliando vê o conjunto antigo inteiro ou o novo
-inteiro, nunca metade de cada.
-
-**Esforço:** ~30 min. Fazer agora deixa o dia 4 puramente aditivo.
-
-### 2. Padrão de nome das classes de configuração — **resolvido**
-
-Adotado o sufixo `Config`: `TopologiaConfig` e `RegrasConfig`. Vale para as outras aplicações.
-
-### 3. Comentários nos arquivos `.yml`
+### Comentários nos arquivos `.yml`
 
 Os `.java` estão sem comentários. Os `.yml` ainda têm, e alguns carregam decisão de arquitetura —
-`processing.guarantee: exactly_once_v2` vem com a explicação de que é ela que torna o registro de já vistos confiável.
-Remover deixa a justificativa só no documento.
+`processing.guarantee: exactly_once_v2` vem com a explicação de que é ela que torna o registro de já vistos confiável, e
+`intervalo-de-recarga-ms` explica por que 30 segundos. Remover deixa a justificativa só no documento.
+
+**Resolvidas:** a `FonteDeRegras` entrou no dia 4, e o padrão de nome das classes de configuração ficou no sufixo
+`Config`.
 
 ---
 
@@ -48,44 +23,40 @@ Remover deixa a justificativa só no documento.
 
 Itens que estavam nesta lista e saíram.
 
-| Item                                | Como ficou                                                                                                                                                |
-|-------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Testes de `MemoriaDoCliente`        | 11 testes cobrindo descarte, janelas, deduplicação, última cidade e ticket médio                                                                          |
-| Linha de base que esquece           | Média móvel exponencial com meia-vida de 30 dias, mais peso mínimo de 5% por transação                                                                    |
-| Teto de memória por cliente         | 200 eventos e 500 identificadores, com métrica sinalizando cliente quente                                                                                 |
-| Segunda regra                       | `RegraValorAbsoluto`, que provou a abstração ao entrar sem tocar no motor                                                                                 |
-| Envenenamento pelo ataque agressivo | Transação que gerou alerta não atualiza mais o ticket médio. A regra emudecia na 12ª transação; agora não emudece                                         |
-| Guarda de partida a frio            | Nas 5 primeiras transações tudo é absorvido, senão a base trava no valor da primeira                                                                      |
-| Janela de 60 minutos sem uso        | `RegraSomaNaHora`, limite absoluto de R$ 10.000, pega o fraudador de ritmo controlado                                                                     |
-| Nomes vagos no motor                | Auditoria completa de nomes: `anterior` → `memoriaAntesDaTransacao`, `CURTA`/`MEDIA` → `CINCO_MINUTOS`/`UMA_HORA`, vocabulário unificado em `ticketMedio` |
+| Item                                 | Como ficou                                                                                                                                                |
+|--------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Testes de `MemoriaDoCliente`         | 11 testes cobrindo descarte, janelas, deduplicação, última cidade e ticket médio                                                                          |
+| Linha de base que esquece            | Média móvel exponencial com meia-vida de 30 dias, mais peso mínimo de 5% por transação                                                                    |
+| Teto de memória por cliente          | 200 eventos e 500 identificadores, com métrica sinalizando cliente quente                                                                                 |
+| Segunda regra                        | Limiar absoluto, que provou a abstração `Regra` ao entrar sem tocar no motor                                                                              |
+| Envenenamento pelo ataque agressivo  | Transação que gerou alerta não atualiza mais o ticket médio. A regra emudecia na 12ª transação; agora não emudece                                         |
+| Guarda de partida a frio             | Nas 5 primeiras transações tudo é absorvido, senão a base trava no valor da primeira                                                                      |
+| Janela de 60 minutos sem uso         | Regra `soma-na-hora`, limite absoluto de R$ 10.000, pega o fraudador de ritmo controlado                                                                  |
+| Repetição de alerta                  | Um alerta por janela; regra sem janela alerta sempre; escalada de severidade fura a supressão. O café de R$ 5 depois do alerta ficou em silêncio          |
+| Regra quebrada derrubando a thread   | `try/catch` por regra, métrica `antifraude.regras.falhas{regra}` e log único por regra                                                                    |
+| `ultimo.cidade` sempre igual à atual | Corrigido com `cidadeAntesDe(horario)`. A regra de geografia era silenciosamente inútil                                                                   |
+| Nomes vagos no motor                 | Auditoria completa de nomes: `anterior` → `memoriaAntesDaTransacao`, `CURTA`/`MEDIA` → `CINCO_MINUTOS`/`UMA_HORA`, vocabulário unificado em `ticketMedio` |
 
 ---
 
 ## Dívidas ainda abertas
 
-### Mediana no lugar de média
+### Mediana no lugar de média — rebaixada a melhoria marginal
 
-**O que a média móvel resolveu:** o esquecimento. Comportamento antigo agora desaparece sozinho.
+**O que a média móvel resolveu:** o esquecimento. Comportamento antigo desaparece sozinho.
 
-**O que ela não resolveu:** resistência a envenenamento. Fraude executada devagar, com muitas transações pequenas, ainda
-desloca o valor e treina o sistema a aceitar valores cada vez maiores.
+**O que a exclusão da transação alertada resolveu depois:** o ataque agressivo. Antes disso a regra emudecia na 12ª
+transação fraudulenta; agora não emudece.
 
-**O que foi resolvido depois:** o ataque **agressivo** — aquele em que a fraude dispara alerta e mesmo assim alimentava
-a base. Excluir da base a transação alertada eliminou esse caso (medido: a regra emudecia na 12ª transação fraudulenta).
-Restam o ataque **paciente**, que se mantém abaixo do limiar de alerta e por isso nunca é excluído, e é contra ele que a
-mediana continua sendo necessária. A `RegraSomaNaHora` cobre boa parte dele por acumulação, mas não o caso de rampa
-lenta ao longo de dias.
+**Por que a mediana perdeu importância.** Ela resiste a **valor extremo isolado** — e um valor extremo isolado hoje
+dispara alerta, logo já não entra na base. O que sobraria para ela é a rampa lenta abaixo do limiar; só que **a mediana
+também cede a isso**, porque ela resiste a poucos outliers, não a um deslocamento gradual da distribuição inteira. Se o
+fraudador vira a maioria das transações, a mediana acompanha, apenas mais devagar.
 
-**Por que não é só trocar a fórmula:** mediana exata exige guardar a distribuição de cada cliente. Com milhões de
-clientes ativos, guardar uma amostra de 200 valores por pessoa daria dezenas de gigabytes.
+**Conclusão:** deixa de ser dívida a pagar e vira melhoria marginal. A defesa real contra a rampa lenta é a regra
+`soma-na-hora`, cujo limite é absoluto e não consulta a linha de base.
 
-**Como resolver:** um estimador de quantil de memória constante — o algoritmo P-quadrado mantém cinco marcadores por
-cliente e estima a mediana em ~40 bytes.
-
-**Mitigação parcial que já existe:** a `RegraValorAbsoluto` não pode ser envenenada, porque não olha para a linha de
-base. Ela cobre o caso extremo mesmo com a média deslocada.
-
-**Esforço:** ~3 h. É o item mais fácil de cortar. A alternativa barata é declarar a limitação.
+**Esforço se um dia valer:** ~3 h com um estimador de quantil (P-quadrado, ~40 bytes por cliente).
 
 ### Amplificação de escrita no changelog
 
@@ -101,106 +72,14 @@ e limitada (últimos 10) ao lado dos baldes.
 
 **Esforço:** ~4 h. Só vale se o teste de carga do dia 6 mostrar que a escrita é gargalo.
 
-### Deduplicação do alerta dentro do motor
-
-**O sintoma medido:** a `RegraSomaNaHora` produziu **29 alertas** num ataque que deveria render 1. Passado o limite da
-hora, ela dispara em toda transação seguinte enquanto a janela não esvazia.
-
-**Por que não é só dessa regra:** qualquer regra baseada em janela acumulada tem o mesmo comportamento. É estrutural,
-não um defeito da regra nova.
-
-**A solução já está desenhada no tópico 3:** chave `cliente + regra + janela + severidade` para decidir se publica, e
-`cliente + regra + janela` para decidir o campo `notificarCliente`. Cabe na memória local, porque a chave inteira vive
-dentro de uma partição.
-
-**Consequência de não fazer:** o cliente recebe dezenas de avisos do mesmo evento — exatamente a fadiga de alerta que o
-tópico 6 mede e que queima o canal de notificação.
-
-**Esforço:** ~3 h. Deve entrar antes do dia 5, porque o `notificacao` herda o problema se a duplicata sair do motor.
-
-### Exceção em regra derruba a thread
-
-Uma regra que lance exceção dentro de `process()` mata a `StreamThread` e para a partição inteira. Hoje não há proteção.
-Com regras vindas do Mongo no dia 4, o risco deixa de ser teórico.
-
-**Solução:** envolver a avaliação de cada regra em `try/catch`, contar a falha numa métrica por regra e seguir com as
-demais. Uma regra quebrada deve desativar a si mesma, não derrubar o motor.
-
-**Esforço:** ~1 h. É a proteção mais barata da lista.
-
 ---
 
-## Dia 4 — Regras sem redeploy
+## Dia 4 — Regras sem redeploy — **concluído**
 
-**O dia mais importante do case.** É aqui que o requisito mais visível do enunciado é atendido.
+Registro completo em [dia-4.md](dia-4.md).
 
-### 4.1 Carga das regras do Mongo
-
-**Como:**
-
-1. Documento de regra no Mongo, com `id`, `versao`, `habilitada`, `severidade`, `janela`, `condicao`
-   e `acoes`
-2. `RegrasNoMongo implements FonteDeRegras`, consultando a cada 30 segundos por regras alteradas desde a última checagem
-3. A consulta devolve zero documentos na maioria das vezes — o custo é ruído estatístico
-4. Ao encontrar mudança, compila as expressões e **troca a referência da lista de uma vez**
-
-**Checkpoint:** editar o YAML, rodar o script de carga, e a regra nova valer em 30 segundos **com o sistema no ar**.
-
-### 4.2 Integração do CEL
-
-**Como:** `RegraCel implements Regra`, recebendo a expressão compilada e o contexto fixo.
-
-O contexto que a expressão enxerga:
-
-| Nome                    | Conteúdo                                      |
-|-------------------------|-----------------------------------------------|
-| `transacao`             | O evento atual                                |
-| `janela5m`, `janela60m` | Contagens e somas do período                  |
-| `perfil`                | Linha de base de 30 dias                      |
-| `ultimo`                | Última cidade e horário                       |
-| `regras`                | Resultado de outras regras, para as compostas |
-
-Nada além disso é acessível — sem rede, sem arquivo, sem reflexão. **O contexto é a fronteira de segurança.**
-
-A `RegraVelocidadeAlta` fixa em código permanece durante a transição, como referência para comparar o comportamento, e
-sai quando as regras em YAML cobrirem o mesmo caso.
-
-### 4.3 As cinco regras em YAML
-
-| Regra                  | Do que precisa                                   |
-|------------------------|--------------------------------------------------|
-| Velocidade alta        | Janela de 5 min + linha de base                  |
-| Valor atípico          | Linha de base                                    |
-| Geografia impossível   | Último valor (cidade e horário)                  |
-| Teste de cartão        | Janela de 5 min, sequência de valores crescentes |
-| Horário fora do padrão | Linha de base de horários                        |
-
-Cada uma com casos de teste no mesmo arquivo, rodando na esteira.
-
-**Nota sobre o que a memória ainda não oferece:** as janelas de 5 e 60 minutos existem, e a linha de base agora é média
-móvel com meia-vida de 30 dias. Mas a **regra de horário fora do padrão exige guardar distribuição de horários** por
-cliente, o que é estrutura nova — provavelmente 24 contadores por faixa de hora. É a regra mais cara das cinco, e a
-primeira candidata a corte.
-
-### 4.4 Grafo de regras compostas
-
-**Como:**
-
-1. Uma regra composta referencia outras por `id` na condição
-2. No carregamento, montar o grafo de dependências e resolver a **ordem topológica**
-3. **Recusar ciclo** na esteira, antes do merge — validação estática, barata
-4. Avaliar na ordem, guardando resultados para as compostas consultarem
-
-**Decisão já tomada:** desligar uma regra **desliga em cascata** as compostas que dependem dela, e o motor informa quais
-caíram junto.
-
-### 4.5 Endpoint de desligamento
-
-**Como:** um `POST /regras/{id}/desligar` que vira o campo `habilitada` e propaga a cascata, devolvendo a lista do que
-foi desligado.
-
-É o interruptor de emergência: a definição da regra muda por Git com revisão, mas **desligar é operação**, e precisa
-levar segundos.
+Regras em CEL no Mongo com recarga de 30s, grafo de compostas com cascata, interruptor operacional, proteção contra
+regra que lança exceção, e controle de repetição de alerta. As três classes Java de regra foram removidas.
 
 ---
 

@@ -1,5 +1,6 @@
 package br.com.antifraude.motor.memoria;
 
+import br.com.antifraude.contrato.Severidade;
 import br.com.antifraude.contrato.Transacao;
 
 import java.time.Duration;
@@ -12,10 +13,35 @@ public record MemoriaDoCliente(
         long ticketMedioCentavos,
         String ultimaCidade,
         Instant ultimoHorario,
-        Map<String, Instant> transacoesVistas) {
+        Map<String, Instant> transacoesVistas,
+        Map<String, AlertaEmitido> alertasEmitidos) {
+
+    public MemoriaDoCliente {
+        eventosRecentes = eventosRecentes == null ? List.of() : eventosRecentes;
+        transacoesVistas = transacoesVistas == null ? Map.of() : transacoesVistas;
+        alertasEmitidos = alertasEmitidos == null ? Map.of() : alertasEmitidos;
+    }
 
     public static MemoriaDoCliente vazia() {
-        return new MemoriaDoCliente(List.of(), 0L, 0L, null, null, Map.of());
+        return new MemoriaDoCliente(List.of(), 0L, 0L, null, null, Map.of(), Map.of());
+    }
+
+    public AlertaEmitido ultimoAlertaDe(String chaveDoAlerta) {
+        return alertasEmitidos.get(chaveDoAlerta);
+    }
+
+    public MemoriaDoCliente registrandoAlerta(
+            String chaveDoAlerta, Severidade severidade, Instant horario) {
+        Map<String, AlertaEmitido> atualizados = new LinkedHashMap<>(alertasEmitidos);
+        atualizados.put(chaveDoAlerta, new AlertaEmitido(horario, severidade));
+        return new MemoriaDoCliente(
+                eventosRecentes,
+                contagemHistorica,
+                ticketMedioCentavos,
+                ultimaCidade,
+                ultimoHorario,
+                transacoesVistas,
+                atualizados);
     }
 
     public boolean jaViu(String transacaoId) {
@@ -42,7 +68,8 @@ public record MemoriaDoCliente(
                 ticketMedioCentavos,
                 cidadeMaisRecente,
                 horarioMaisRecente,
-                identificadoresVistos)
+                identificadoresVistos,
+                alertasEmitidos)
                 .descartarOQueExpirou(horarioDaTransacao);
     }
 
@@ -57,7 +84,8 @@ public record MemoriaDoCliente(
                 novoTicketMedioCentavos,
                 ultimaCidade,
                 ultimoHorario,
-                transacoesVistas);
+                transacoesVistas,
+                alertasEmitidos);
     }
 
     private long calcularTicketMedio(Instant horarioDaTransacao, long valorCentavos) {
@@ -96,13 +124,21 @@ public record MemoriaDoCliente(
         removerOsMaisAntigos(
                 identificadoresDentroDaRetencao, LimitesDaMemoria.MAXIMO_DE_IDENTIFICADORES);
 
+        Map<String, AlertaEmitido> alertasDentroDaRetencao = new LinkedHashMap<>();
+        alertasEmitidos.forEach((chave, emitido) -> {
+            if (emitido.horario().isAfter(eventoMaisAntigoQueVale)) {
+                alertasDentroDaRetencao.put(chave, emitido);
+            }
+        });
+
         return new MemoriaDoCliente(
                 eventosDentroDoTeto,
                 contagemHistorica,
                 ticketMedioCentavos,
                 ultimaCidade,
                 ultimoHorario,
-                identificadoresDentroDaRetencao);
+                identificadoresDentroDaRetencao,
+                alertasDentroDaRetencao);
     }
 
     private static List<EventoRecente> manterOsMaisRecentes(
@@ -141,6 +177,14 @@ public record MemoriaDoCliente(
                 .filter(evento -> evento.horario().isAfter(inicioDaJanela))
                 .mapToLong(EventoRecente::valorCentavos)
                 .sum();
+    }
+
+    public String cidadeAntesDe(Instant horarioDeReferencia) {
+        return eventosRecentes.stream()
+                .filter(evento -> evento.horario().isBefore(horarioDeReferencia))
+                .max(Comparator.comparing(EventoRecente::horario))
+                .map(EventoRecente::cidade)
+                .orElse(null);
     }
 
     public boolean temHistoricoSuficiente(int minimoDeTransacoes) {

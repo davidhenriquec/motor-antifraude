@@ -730,11 +730,44 @@ Se cair antes de confirmar, **a anotação sobreviveu?** Sem atomicidade, não h
 | **Motor** | O mesmo alerta *lógico* ser publicado duas vezes | Memória local |
 | **Serviço de notificação** | O mesmo alerta *publicado* ser entregue duas vezes | Redis |
 
-**No motor** a chave é `cliente + regra + janela + severidade` para decidir se publica — assim uma
-escalada de médio para alto chega ao antifraude. E `cliente + regra + janela` para decidir o campo
-`notificarCliente` — assim o cliente recebe **um aviso por janela por regra**.
+**No motor** a chave é `regra + janela`, guardada dentro da memória do cliente. Isso só é possível porque todas as
+transações de um cliente caem na mesma partição.
 
-Isso só é possível porque a chave inteira cabe dentro de uma partição.
+**Vale distinguir dois problemas que o nome "deduplicação" confundia:**
+
+|                         | O que é                                        | Como é tratado                           |
+|-------------------------|------------------------------------------------|------------------------------------------|
+| **Reenvio**             | A mesma mensagem chega duas vezes              | `jaViu(transacaoId)` na entrada do motor |
+| **Repetição de alerta** | Transações **diferentes**, mesmo acontecimento | Controle por janela, descrito abaixo     |
+
+O segundo só apareceu quando o sistema entrou em operação, e é o mais grave dos dois.
+
+**O sintoma medido.** Uma regra baseada em janela continua verdadeira enquanto a janela não esvazia, e é reavaliada a
+cada transação. Num ataque de 30 transações, a `velocidade-alta` publicou 16 alertas e a `soma-na-hora` publicou 11 —
+todos descrevendo o mesmo acontecimento.
+
+O caso que expôs o absurdo: a regra `soma-na-hora` não olha o valor da transação atual, só o acumulado. Depois que a
+soma cruza o limite, **um café de R$ 5 gera um alerta de severidade ALTA**. Isso foi reproduzido e medido.
+
+**Por que importa mais do que parece.** Um falso positivo que repete 16 vezes é 16 vezes pior que um que dispara uma
+vez. E o gatilho pode ser inteiramente legítimo — quem compra notebook, monitor e teclado em cinco minutos aciona a
+`velocidade-alta` em cada compra. A repetição multiplica o dano de todo erro do motor.
+
+**A regra adotada:**
+
+| Tipo de regra                  | Comportamento                  | Por quê                                            |
+|--------------------------------|--------------------------------|----------------------------------------------------|
+| Com janela (`5m`, `60m`)       | Um alerta por janela           | O acontecimento é um só                            |
+| Sem janela (`valor-absoluto`)  | Alerta em toda ocorrência      | Cada compra grande é um evento próprio a confirmar |
+| Severidade sobe (MÉDIA → ALTA) | Publica mesmo já tendo avisado | Escalada é informação nova para o antifraude       |
+
+A memória do cliente guarda `alertasEmitidos`: uma entrada por `regra + janela`, com horário e severidade, podada junto
+com os eventos. Nenhuma peça nova, nenhum Redis.
+
+**Interação com o congelamento da linha de base.** Um cliente legítimo que dispara a regra sofre duas coisas ao mesmo
+tempo: recebe vários alertas *e* tem o ticket médio congelado, porque transação alertada não alimenta a base. O controle
+de repetição resolve metade. A outra metade depende da resposta *"fui eu"* do cliente, que continua documentada e não
+implementada.
 
 ### 2.5 A ordem da deduplicação na entrega externa
 
@@ -1372,12 +1405,25 @@ sem definição de função. Parece limitação e é a virtude central — **tod
 rápido**. A primeira das cinco portas de perigo fecha por construção da linguagem, não por cuidado de
 quem escreve.
 
-| Porta de perigo | Como CEL fecha |
-|---|---|
-| Laço infinito | Impossível na linguagem |
-| Cálculo caro | Sem laço, o custo é proporcional ao tamanho da expressão |
-| Campo inexistente | CEL é tipada — a CI rejeita antes do merge |
-| Acesso indevido | Sem rede, sem arquivo, sem reflexão |
+| Porta de perigo   | Como CEL fecha                                           |
+|-------------------|----------------------------------------------------------|
+| Laço infinito     | Impossível na linguagem                                  |
+| Cálculo caro      | Sem laço, o custo é proporcional ao tamanho da expressão |
+| Campo inexistente | **Não é a tipagem** — ver a correção abaixo              |
+| Acesso indevido   | Sem rede, sem arquivo, sem reflexão                      |
+
+**Correção após a implementação.** O documento afirmava que a tipagem do CEL rejeitaria campo inexistente na CI. **Isso
+se mostrou falso na prática, e dois testes escritos para provar a afirmação falharam.** O contexto é declarado como
+`map(string, dyn)`, e sobre um mapa desse tipo o compilador aceita qualquer chave: o erro só apareceria em tempo de
+execução, dentro do `process()`.
+
+O que fechou a porta foi outra coisa, mais forte: **toda condição é avaliada contra um contexto de exemplo no
+carregamento**, antes de entrar no conjunto ativo. Isso recusa três classes de erro que a tipagem sozinha não pegaria —
+campo inexistente, condição que não devolve booleano, e referência a uma regra que não existe. Regra recusada fica de
+fora e as demais continuam rodando.
+
+Obter a verificação em tempo de compilação exigiria declarar o contexto como tipo estruturado via protobuf, o que foi
+considerado custo desproporcional para o ganho.
 
 **Trade-off aceito:** menos expressiva que um motor completo. Regras que exigissem encadeamento
 complexo entre múltiplos fatos não são expressáveis — mas nenhuma das nossas exige.

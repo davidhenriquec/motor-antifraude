@@ -3,10 +3,11 @@ package br.com.antifraude.motor.kafka;
 import br.com.antifraude.contrato.Alerta;
 import br.com.antifraude.contrato.Transacao;
 import br.com.antifraude.motor.deteccao.AvaliadorDeTransacao;
+import br.com.antifraude.motor.deteccao.FalhaDeRegra;
 import br.com.antifraude.motor.deteccao.ResultadoDaAvaliacao;
 import br.com.antifraude.motor.memoria.MemoriaDoCliente;
 import br.com.antifraude.motor.memoria.RepositorioNoKafkaStreams;
-import br.com.antifraude.motor.regra.Regra;
+import br.com.antifraude.motor.regra.FonteDeRegras;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.apache.kafka.streams.processor.api.Processor;
@@ -16,13 +17,14 @@ import org.apache.kafka.streams.state.KeyValueStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.List;
+import java.util.HashSet;
+import java.util.Set;
 
 public class ProcessadorDeTransacoes implements Processor<String, Transacao, String, Alerta> {
 
     private static final Logger log = LoggerFactory.getLogger(ProcessadorDeTransacoes.class);
 
-    private final List<Regra> regras;
+    private final FonteDeRegras fonteDeRegras;
     private final MeterRegistry metricas;
 
     private ProcessorContext<String, Alerta> contexto;
@@ -31,9 +33,10 @@ public class ProcessadorDeTransacoes implements Processor<String, Transacao, Str
     private Counter transacoesDuplicadas;
     private Counter alertasGerados;
     private Counter memoriasNoTeto;
+    private final Set<String> regrasJaRelatadas = new HashSet<>();
 
-    public ProcessadorDeTransacoes(List<Regra> regras, MeterRegistry metricas) {
-        this.regras = regras;
+    public ProcessadorDeTransacoes(FonteDeRegras fonteDeRegras, MeterRegistry metricas) {
+        this.fonteDeRegras = fonteDeRegras;
         this.metricas = metricas;
     }
 
@@ -43,7 +46,7 @@ public class ProcessadorDeTransacoes implements Processor<String, Transacao, Str
 
         KeyValueStore<String, MemoriaDoCliente> memoriasPorCliente = contexto.getStateStore(TopologiaConfig.MEMORIA_DO_CLIENTE);
 
-        this.avaliador = new AvaliadorDeTransacao(new RepositorioNoKafkaStreams(memoriasPorCliente), regras);
+        this.avaliador = new AvaliadorDeTransacao(new RepositorioNoKafkaStreams(memoriasPorCliente), fonteDeRegras);
 
         this.transacoesAvaliadas = Counter.builder("antifraude.transacoes.avaliadas")
                 .description("Transacoes que passaram pela avaliacao de regras")
@@ -58,7 +61,7 @@ public class ProcessadorDeTransacoes implements Processor<String, Transacao, Str
                 .description("Transacoes de clientes cuja memoria atingiu o teto de eventos")
                 .register(metricas);
 
-        log.info("Tarefa {} assumida com {} regra(s) ativa(s)", contexto.taskId(), regras.size());
+        log.info("Tarefa {} assumida com {} regra(s) ativa(s)", contexto.taskId(), fonteDeRegras.regrasAtivas().size());
     }
 
     @Override
@@ -79,6 +82,20 @@ public class ProcessadorDeTransacoes implements Processor<String, Transacao, Str
 
         if (resultado.memoriaAtingiuOTeto()) {
             memoriasNoTeto.increment();
+        }
+
+        for (String regraId : resultado.alertasSuprimidos()) {
+            metricas.counter("antifraude.alertas.suprimidos", "regra", regraId).increment();
+        }
+
+        for (FalhaDeRegra falha : resultado.falhas()) {
+            metricas.counter("antifraude.regras.falhas", "regra", falha.regraId()).increment();
+            if (regrasJaRelatadas.add(falha.regraId())) {
+                log.warn(
+                        "Regra {} lancou excecao e foi ignorada nesta transacao: {}",
+                        falha.regraId(),
+                        falha.motivo());
+            }
         }
 
         for (Alerta alerta : resultado.alertas()) {

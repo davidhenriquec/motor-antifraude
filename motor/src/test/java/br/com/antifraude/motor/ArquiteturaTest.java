@@ -21,7 +21,8 @@ class ArquiteturaTest {
 
     private static final Set<String> ADAPTADORES = Set.of(
             "RepositorioNoKafkaStreams.java",
-            "RegrasConfig.java");
+            "RegrasConfig.java",
+            "RegrasNoMongo.java");
 
     private static final Set<String> FRAMEWORKS = Set.of(
             "org.springframework",

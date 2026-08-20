@@ -3,7 +3,7 @@ package br.com.antifraude.motor.kafka;
 import br.com.antifraude.contrato.Alerta;
 import br.com.antifraude.contrato.Transacao;
 import br.com.antifraude.motor.memoria.MemoriaDoCliente;
-import br.com.antifraude.motor.regra.Regra;
+import br.com.antifraude.motor.regra.FonteDeRegras;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.apache.kafka.common.serialization.Serde;
@@ -23,7 +23,6 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.annotation.EnableKafkaStreams;
 
-import java.util.List;
 
 @Configuration
 @EnableKafkaStreams
@@ -35,7 +34,7 @@ public class TopologiaConfig {
 
     private final ObjectMapper conversorJson;
     private final MeterRegistry metricas;
-    private final List<Regra> regras;
+    private final FonteDeRegras fonteDeRegras;
 
     @Value("${motor.topico-de-entrada}")
     private String topicoDeEntrada;
@@ -43,10 +42,11 @@ public class TopologiaConfig {
     @Value("${motor.topico-de-saida}")
     private String topicoDeSaida;
 
-    public TopologiaConfig(ObjectMapper conversorJson, MeterRegistry metricas, List<Regra> regras) {
+    public TopologiaConfig(
+            ObjectMapper conversorJson, MeterRegistry metricas, FonteDeRegras fonteDeRegras) {
         this.conversorJson = conversorJson;
         this.metricas = metricas;
-        this.regras = regras;
+        this.fonteDeRegras = fonteDeRegras;
     }
 
     @Bean
@@ -55,7 +55,7 @@ public class TopologiaConfig {
                 construtorDaTopologia,
                 conversorJson,
                 metricas,
-                regras,
+                fonteDeRegras,
                 topicoDeEntrada,
                 topicoDeSaida,
                 true);
@@ -65,7 +65,7 @@ public class TopologiaConfig {
             StreamsBuilder construtorDaTopologia,
             ObjectMapper conversorJson,
             MeterRegistry metricas,
-            List<Regra> regras,
+            FonteDeRegras fonteDeRegras,
             String topicoDeEntrada,
             String topicoDeSaida,
             boolean memoriaEmDisco) {
@@ -83,13 +83,13 @@ public class TopologiaConfig {
 
         KStream<String, Alerta> alertas = construtorDaTopologia
                 .stream(topicoDeEntrada, Consumed.with(Serdes.String(), serdeTransacao))
-                .process(() -> new ProcessadorDeTransacoes(regras, metricas), MEMORIA_DO_CLIENTE);
+                .process(() -> new ProcessadorDeTransacoes(fonteDeRegras, metricas), MEMORIA_DO_CLIENTE);
 
         alertas.to(topicoDeSaida, Produced.with(Serdes.String(), serdeAlerta));
 
         log.info(
                 "Topologia montada: entrada={} saida={} memoria={} regras={} memoriaEmDisco={}",
-                topicoDeEntrada, topicoDeSaida, MEMORIA_DO_CLIENTE, regras.size(), memoriaEmDisco);
+                topicoDeEntrada, topicoDeSaida, MEMORIA_DO_CLIENTE, fonteDeRegras.regrasAtivas().size(), memoriaEmDisco);
 
         return alertas;
     }

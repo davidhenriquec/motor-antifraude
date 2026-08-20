@@ -4,8 +4,9 @@ import br.com.antifraude.contrato.Canal;
 import br.com.antifraude.contrato.Transacao;
 import br.com.antifraude.motor.memoria.MemoriaDoCliente;
 import br.com.antifraude.motor.memoria.RepositorioDeMemoria;
+import br.com.antifraude.motor.regra.FonteDeRegras;
 import br.com.antifraude.motor.regra.Regra;
-import br.com.antifraude.motor.regra.RegraVelocidadeAlta;
+import br.com.antifraude.motor.regra.RegrasDeTeste;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -29,7 +30,7 @@ class AvaliadorDeTransacaoTest {
     @BeforeEach
     void preparar() {
         repositorio = new RepositorioEmMapa();
-        avaliador = new AvaliadorDeTransacao(repositorio, List.of(new RegraVelocidadeAlta()));
+        avaliador = new AvaliadorDeTransacao(repositorio, FonteDeRegras.fixa(List.of(RegrasDeTeste.velocidadeAlta())));
     }
 
     @Test
@@ -61,7 +62,7 @@ class AvaliadorDeTransacaoTest {
     @Test
     @DisplayName("sem regras configuradas nenhum alerta e produzido, mas a memoria continua sendo mantida")
     void mantemMemoriaSemRegras() {
-        AvaliadorDeTransacao semRegras = new AvaliadorDeTransacao(repositorio, List.of());
+        AvaliadorDeTransacao semRegras = new AvaliadorDeTransacao(repositorio, FonteDeRegras.fixa(List.of()));
 
         ResultadoDaAvaliacao resultado = semRegras.avaliar(transacao(CLIENTE, 10_000, Instant.now()));
 
@@ -73,7 +74,8 @@ class AvaliadorDeTransacaoTest {
     @DisplayName("todas as regras sao consultadas e cada disparo vira um alerta")
     void consultaTodasAsRegras() {
         AvaliadorDeTransacao comDuas = new AvaliadorDeTransacao(
-                repositorio, List.of(new RegraQueSempreDispara("a"), new RegraQueSempreDispara("b")));
+                repositorio,
+                FonteDeRegras.fixa(List.of(new RegraQueSempreDispara("a"), new RegraQueSempreDispara("b"))));
 
         ResultadoDaAvaliacao resultado = comDuas.avaliar(transacao(CLIENTE, 10_000, Instant.now()));
 
@@ -90,7 +92,7 @@ class AvaliadorDeTransacaoTest {
         }
 
         RegraEspia espia = new RegraEspia();
-        AvaliadorDeTransacao comEspia = new AvaliadorDeTransacao(repositorio, List.of(espia));
+        AvaliadorDeTransacao comEspia = new AvaliadorDeTransacao(repositorio, FonteDeRegras.fixa(List.of(espia)));
 
         comEspia.avaliar(transacao(CLIENTE, 10_000, Instant.now()));
 
@@ -111,7 +113,7 @@ class AvaliadorDeTransacaoTest {
     @DisplayName("durante a formacao do ticket medio o alerta nao impede a atualizacao")
     void naFormacaoDoTicketMedioTudoEhAbsorvido() {
         AvaliadorDeTransacao sempreAlerta = new AvaliadorDeTransacao(
-                repositorio, List.of(new RegraQueSempreDispara("a")));
+                repositorio, FonteDeRegras.fixa(List.of(new RegraQueSempreDispara("a"))));
         Instant base = Instant.now();
 
         for (int i = 0; i < 4; i++) {
@@ -132,21 +134,62 @@ class AvaliadorDeTransacaoTest {
         }
         long ticketMedioLegitimo = repositorio.buscar(CLIENTE).ticketMedioCentavos();
 
-        int disparos = 0;
+        int vezesQueARegraCasou = 0;
         for (int i = 0; i < 30; i++) {
             ResultadoDaAvaliacao resultado =
                     avaliador.avaliar(transacao(CLIENTE, 80_000, base.plusSeconds(60 + i)));
-            if (resultado.temAlertas()) {
-                disparos++;
+            boolean casou = resultado.temAlertas()
+                    || resultado.alertasSuprimidos().contains(RegrasDeTeste.VELOCIDADE_ALTA);
+            if (casou) {
+                vezesQueARegraCasou++;
             }
         }
 
-        assertThat(disparos)
-                .as("antes da correcao a regra emudecia por volta da 12a transacao fraudulenta")
+        assertThat(vezesQueARegraCasou)
+                .as("a regra precisa continuar reconhecendo a fraude ate a 30a transacao; "
+                        + "antes da correcao ela emudecia por volta da 12a")
                 .isEqualTo(30);
         assertThat(repositorio.buscar(CLIENTE).ticketMedioCentavos())
                 .as("nenhuma transacao alertada pode mover a linha de base")
                 .isEqualTo(ticketMedioLegitimo);
+    }
+
+    @Test
+    @DisplayName("regra que lanca excecao nao derruba a avaliacao das demais")
+    void regraQuebradaNaoDerrubaAsOutras() {
+        AvaliadorDeTransacao comRegraQuebrada = new AvaliadorDeTransacao(
+                repositorio,
+                FonteDeRegras.fixa(List.of(new RegraQueQuebra(), new RegraQueSempreDispara("boa"))));
+
+        ResultadoDaAvaliacao resultado =
+                comRegraQuebrada.avaliar(transacao(CLIENTE, 10_000, Instant.now()));
+
+        assertThat(resultado.alertas())
+                .as("a regra boa precisa continuar produzindo alerta")
+                .hasSize(1);
+        assertThat(resultado.falhas())
+                .as("e a falha precisa ser reportada, nao engolida")
+                .extracting(FalhaDeRegra::regraId)
+                .containsExactly("quebrada");
+    }
+
+    @Test
+    @DisplayName("a fonte de regras e consultada a cada transacao, permitindo troca sem reinicio")
+    void fonteDeRegrasEhConsultadaACadaTransacao() {
+        List<Regra> regrasAtivas = new java.util.ArrayList<>();
+        AvaliadorDeTransacao comFonteMutavel =
+                new AvaliadorDeTransacao(repositorio, () -> List.copyOf(regrasAtivas));
+
+        ResultadoDaAvaliacao semRegras =
+                comFonteMutavel.avaliar(transacao(CLIENTE, 10_000, Instant.now()));
+        regrasAtivas.add(new RegraQueSempreDispara("nova"));
+        ResultadoDaAvaliacao comRegraNova =
+                comFonteMutavel.avaliar(transacao(CLIENTE, 10_000, Instant.now()));
+
+        assertThat(semRegras.temAlertas()).isFalse();
+        assertThat(comRegraNova.temAlertas())
+                .as("a regra entrou sem reiniciar o avaliador: e isso que o dia 4 exige")
+                .isTrue();
     }
 
     private Transacao transacao(String cliente, long valorCentavos, Instant horario) {
@@ -214,6 +257,24 @@ class AvaliadorDeTransacaoTest {
                     Map.of(),
                     transacao.horarioEvento(),
                     Instant.now()));
+        }
+    }
+
+    private static final class RegraQueQuebra implements Regra {
+        @Override
+        public String id() {
+            return "quebrada";
+        }
+
+        @Override
+        public int versao() {
+            return 1;
+        }
+
+        @Override
+        public java.util.Optional<br.com.antifraude.contrato.Alerta> avaliar(
+                Transacao transacao, MemoriaDoCliente memoria) {
+            throw new IllegalStateException("campo inexistente na regra");
         }
     }
 
