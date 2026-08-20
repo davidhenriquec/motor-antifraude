@@ -1009,6 +1009,55 @@ está avaliando naquele instante vê **o conjunto antigo inteiro ou o novo intei
 
 O processo do motor era o mesmo em todos os casos — não foi reiniciado nenhuma vez.
 
+#### "Mas editar no Git não é um deploy?"
+
+É a pergunta que sempre vem, e vale responder com rigor.
+
+**Deploy é trocar o programa que está rodando.** O que custa num deploy não é o arquivo mudar — é o processo morrer e
+outro nascer no lugar.
+
+**O teste que separa as duas coisas:** o processo em produção é substituído?
+
+|                                   | Deploy de verdade | Mudança de regra |
+|-----------------------------------|-------------------|------------------|
+| Constrói artefato novo            | sim               | não              |
+| Processo é substituído            | sim               | **não**          |
+| Identificador do processo muda    | sim               | **não**          |
+| Contador de tempo no ar zera      | sim               | **não**          |
+| Partições redistribuem            | sim               | não              |
+| Memória dos clientes reconstruída | sim               | não              |
+| Precisa de janela aprovada        | sim               | não              |
+
+**Medido no sistema**, antes e depois de trocar o limiar de uma regra:
+
+|                           | Antes    | Depois       |
+|---------------------------|----------|--------------|
+| Identificador do processo | 68083    | **68083**    |
+| Tempo no ar               | 11.139 s | **11.141 s** |
+| Versão da regra           | 1        | **2**        |
+
+O processo é o mesmo, e o contador de tempo **não zerou** — subiu dois segundos, contínuo. Num deploy, os dois teriam
+mudado.
+
+**A analogia que resolve:** ninguém chama de deploy trocar uma bandeira de funcionalidade, nem mudar um valor pelo
+painel administrativo. É o mesmo caso — a esteira faz um `INSERT` no banco. Não há build, não há imagem nova, não há
+substituição de contêiner. **O artefato rodando em produção é byte a byte idêntico antes e depois.**
+
+**Onde a crítica tem razão:** o caminho do Git adiciona espera de *processo* — revisão, aprovação, esteira. Para quem
+espera, isso se parece com deploy, mesmo não sendo. É exatamente por isso que existem dois caminhos:
+
+| Ação                        | Caminho               | Tempo           | Passa pelo Git? |
+|-----------------------------|-----------------------|-----------------|-----------------|
+| Mudar **o que a regra faz** | Git → esteira → banco | minutos a horas | sim             |
+| **Desligar** uma regra      | endpoint operacional  | **segundos**    | não             |
+
+**O que o requisito realmente protege:** que mudar um limiar exija um desenvolvedor, uma compilação e uma janela de
+release. Um analista de fraude edita uma linha de texto — sem build, sem parar o sistema.
+
+**Um detalhe de infraestrutura que costuma vir junto:** a esteira do GitHub roda fora da rede do banco. As saídas usuais
+são um executor auto-hospedado dentro da VPC, ou a esteira invocar uma função que faz a escrita. É problema de rede, não
+de arquitetura.
+
 #### Por que 30 segundos, e não 5 minutos
 
 Para o interruptor de emergência ser útil. Às 3 da manhã, com uma regra gerando milhares de alarmes falsos, esperar 5
